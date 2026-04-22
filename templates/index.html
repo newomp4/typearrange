@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TypeArrange — by @newomp4</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◼︎</span>
+      <span class="brand-name">TypeArrange</span>
+      <span class="brand-by">by <a href="#" tabindex="-1">@newomp4</a></span>
+    </div>
+    <div class="topbar-right">
+      <span id="status" class="status">idle</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+
+    <!-- Drop zone / preview pane -->
+    <section class="stage">
+      <div id="dropzone" class="dropzone">
+        <div class="dropzone-inner">
+          <div class="dropzone-mark">drop a video here</div>
+          <div class="dropzone-sub">or <button id="pickFile" class="link">choose a file</button></div>
+          <input id="fileInput" type="file" accept="video/*" hidden />
+        </div>
+      </div>
+
+      <div id="preview" class="preview hidden">
+        <!-- The video plays invisibly. Canvas is the composited output. -->
+        <video id="video" playsinline preload="auto"></video>
+        <canvas id="canvas"></canvas>
+
+        <div class="transport">
+          <button id="playBtn" class="btn-icon" aria-label="Play/pause">▶</button>
+          <div id="scrubber" class="scrubber">
+            <div id="scrubberFill" class="scrubber-fill"></div>
+          </div>
+          <span id="timeLabel" class="time">0:00 / 0:00</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right side controls -->
+    <aside class="panel">
+      <div class="panel-section">
+        <div class="panel-title">font</div>
+        <div class="seg" id="fontSeg" role="tablist">
+          <button class="seg-item active" data-val="Arial">Arial</button>
+          <button class="seg-item" data-val="Helvetica">Helvetica</button>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">blend under text</div>
+        <div class="seg" id="blendSeg">
+          <button class="seg-item" data-val="none">none</button>
+          <button class="seg-item active" data-val="difference">invert</button>
+          <button class="seg-item" data-val="exclusion">soft</button>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="row">
+          <label>words / caption</label>
+          <span class="val" id="wordsVal">6</span>
+        </div>
+        <input type="range" id="wordsRange" min="3" max="8" step="1" value="6" />
+      </div>
+
+      <div class="panel-section">
+        <div class="row">
+          <label>tracking</label>
+          <span class="val" id="trackVal">-0.06em</span>
+        </div>
+        <input type="range" id="trackRange" min="-120" max="20" step="1" value="-60" />
+      </div>
+
+      <div class="panel-section">
+        <div class="row">
+          <label>posterize (fps)</label>
+          <span class="val" id="fpsVal">12</span>
+        </div>
+        <input type="range" id="fpsRange" min="4" max="30" step="1" value="12" />
+      </div>
+
+      <div class="panel-section">
+        <div class="row">
+          <label>squash &amp; stretch</label>
+          <span class="val" id="squashVal">0.6</span>
+        </div>
+        <input type="range" id="squashRange" min="0" max="100" step="1" value="60" />
+      </div>
+
+      <div class="panel-section">
+        <div class="row">
+          <label>size</label>
+          <span class="val" id="sizeVal">1.0×</span>
+        </div>
+        <input type="range" id="sizeRange" min="50" max="180" step="1" value="100" />
+      </div>
+
+      <div class="panel-section actions">
+        <button id="exportBtn" class="btn btn-primary" disabled>export .webm</button>
+        <button id="resetBtn" class="btn">reset</button>
+      </div>
+
+      <div class="panel-section hint">
+        <div class="hint-title">how this works</div>
+        <div class="hint-body">
+          Drop a video. Whisper transcribes it locally with word-level
+          timestamps. Words get grouped into caption phrases of 4–7 words and
+          laid out in a tight collage. Important words use the black weight;
+          articles and fillers use thin/italic. Animation snaps at a low
+          framerate for the posterized motion-graphic feel.
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Order matters: utilities → layout → animation → app. -->
+  <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/layout.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/animation.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/renderer.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

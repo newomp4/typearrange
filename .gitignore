@@ -1,0 +1,28 @@
+# Python virtualenv (recreated by ./setup.sh)
+venv/
+
+# Whisper model weights & cache (redownloaded by ./setup.sh)
+models/
+
+# User-supplied videos and rendered exports
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local environment overrides
+.env
+
+# Claude Code local session state
+.claude/
