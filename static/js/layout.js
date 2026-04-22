@@ -55,9 +55,18 @@ TA.layout = (() => {
 
   // ------------------------------------------------------------------
   // 2. Presets.
+  //
+  //     The old pool included `stagger` (alternating rows left / right
+  //     within one caption) and `pyramid` (slight per-row x offsets).
+  //     Those made multi-caption video read as "text scattered across
+  //     the screen" because every caption landed somewhere different.
+  //     With the alignment setting we now force one of the three
+  //     clustered alignments by default, and the "mixed" mode just
+  //     rotates between those three rather than the old stagger/pyramid
+  //     chaos.
   // ------------------------------------------------------------------
-  const PRESETS = ['stack-center', 'stack-left', 'stack-right', 'stagger', 'pyramid'];
-  const pickPreset = rand => PRESETS[Math.floor(rand() * PRESETS.length)];
+  const MIXED_POOL = ['stack-center', 'stack-left', 'stack-right'];
+  const pickPreset = rand => MIXED_POOL[Math.floor(rand() * MIXED_POOL.length)];
 
   // ------------------------------------------------------------------
   // 3. Measurement.
@@ -116,9 +125,12 @@ TA.layout = (() => {
     const {
       fontFamily, baseSize, tracking, maxRowWidthFrac, sizeScale, aspect,
       safeCX, safeCY, safeW, safeH, brandColors, wordGapEm, boring,
+      alignment,
     } = opts;
     const rand = U.mulberry32(seedInt);
-    const preset = boring ? 'stack-center' : pickPreset(rand);
+    const preset = boring
+      ? 'stack-center'
+      : (alignment === 'mixed' ? pickPreset(rand) : `stack-${alignment}`);
 
     const wordGap = (a, b) => wordGapEm * (a.sizeNH + b.sizeNH) * 0.5 / aspect;
 
@@ -216,16 +228,6 @@ TA.layout = (() => {
         case 'stack-right':
           xStart = safeCX + maxRowWidthFrac / 2 - rowW;
           break;
-        case 'stagger':
-          xStart = (rowIdx % 2 === 0)
-            ? safeCX - maxRowWidthFrac / 2 * 0.85
-            : safeCX + maxRowWidthFrac / 2 * 0.85 - rowW;
-          break;
-        case 'pyramid': {
-          const offset = (rowIdx - (rows.length - 1) / 2) * 0.012;
-          xStart = safeCX - rowW / 2 + offset;
-          break;
-        }
         default: // 'stack-center'
           xStart = safeCX - rowW / 2;
       }
@@ -370,6 +372,7 @@ TA.layout = (() => {
       safeArea     = DEFAULT_SAFE_AREA,
       brandColors  = null,
       wordGapEm    = 0.33,
+      alignment    = 'center',
     } = settings;
 
     const safeW  = Math.max(0.1, safeArea.x1 - safeArea.x0);
@@ -405,6 +408,7 @@ TA.layout = (() => {
       safeCX, safeCY, safeW, safeH,
       brandColors,
       wordGapEm,
+      alignment,
       boring: !!g.boring,
     }, U.hash32(`${i}-${fontFamily}-${g[0]?.w || ''}`)));
   }

@@ -28,6 +28,11 @@
   const settings = {
     fontFamily:      'Arial',
     blendMode:       'difference',
+    /** 'left' | 'center' | 'right' | 'mixed' — where captions cluster
+     *  inside the safe area. Center is the default; mixed rotates
+     *  across center/left/right (no longer touches the old stagger
+     *  preset, which scattered rows within a single caption). */
+    alignment:       'center',
     wordsPerCaption: 6,
     trackingEm:      -0.06,
     wordGapEm:       0.33,
@@ -233,6 +238,7 @@
       aspect,
       safeArea:        settings.safeArea,
       brandColors:     settings.brandColors,
+      alignment:       settings.alignment,
     });
     if (renderer) renderer.state.captions = captions;
   }
@@ -662,11 +668,34 @@
     if (isFinite(video.duration)) video.currentTime = u * video.duration;
   });
 
-  // Keyboard: space = play/pause.
+  // Keyboard shortcuts — all suppressed when focus is in an input /
+  // button / textarea so we don't hijack typing or native button activation.
   document.addEventListener('keydown', e => {
-    if (e.code === 'Space' && !['INPUT', 'BUTTON'].includes(document.activeElement?.tagName)) {
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+
+    // Space: play/pause.
+    if (e.code === 'Space') {
       e.preventDefault();
-      if (!video.paused) video.pause(); else video.play();
+      if (video.paused) video.play(); else video.pause();
+      return;
+    }
+
+    // Arrow keys: scrub by 3s. Shift-arrow jumps by 10s for a larger step.
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      if (!isFinite(video.duration)) return;
+      e.preventDefault();
+      const step = (e.shiftKey ? 10 : 3) * (e.code === 'ArrowRight' ? 1 : -1);
+      video.currentTime = U.clamp(video.currentTime + step, 0, video.duration);
+      return;
+    }
+
+    // M: toggle mute.
+    if (e.key === 'm' || e.key === 'M') {
+      e.preventDefault();
+      video.muted = !video.muted;
+      refreshMuteBtn();
+      return;
     }
   });
 
@@ -692,6 +721,10 @@
   wireSeg($('#blendSeg'), v => {
     settings.blendMode = v;
     applySettingsToRenderer();
+  });
+  wireSeg($('#alignSeg'), v => {
+    settings.alignment = v;
+    rebuildCaptions();
   });
 
   // Range controls.
