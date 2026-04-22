@@ -33,11 +33,22 @@
     posterizeFps:    12,
     squash:          0.6,
     sizeScale:       1.0,
+    safeArea:        { ...TA.layout.DEFAULT_SAFE_AREA },
+    /** Map of bare-lowercase word → hex colour. Applied per-word in
+     *  layout so matching words render in the chosen colour (still
+     *  composited through the current blend mode). */
+    brandColors:     {},
   };
 
   let transcript = null;     // { words, duration, video_url, language }
+  /** Caption groups (2-D list of {w, s, e}). Held in app state rather
+   *  than recomputed each rebuild so user edits in the captions panel
+   *  survive visual-setting changes. Regenerated only when the source
+   *  transcript changes or wordsPerCaption changes. */
+  let groups = null;
   let captions = [];
   let renderer = null;
+  let safeAreaCtl = null;
 
   // =====================================================================
   // 1. Upload + transcription
@@ -113,12 +124,26 @@
 
     // Initial layout + renderer.
     initRenderer();
+    initSafeArea();
+    rebuildGroups();
     rebuildCaptions();
     startLoop();
 
     // Auto-play muted so captions animate in immediately.
     video.muted = true;
     try { await video.play(); } catch (_) {}
+  }
+
+  function initSafeArea() {
+    if (safeAreaCtl) return;
+    const wrap = document.getElementById('canvasWrap');
+    const box  = document.getElementById('safeBox');
+    safeAreaCtl = TA.safeArea.attach(wrap, box, (next) => {
+      settings.safeArea = next;
+      rebuildCaptions();
+    });
+    // Apply initial state.
+    safeAreaCtl.set(settings.safeArea);
   }
 
   function initRenderer() {
@@ -138,21 +163,170 @@
     });
   }
 
-  function rebuildCaptions() {
+  /** Regenerate caption groups from the raw transcript. Throws away any
+   *  user edits — only called on fresh transcription or when
+   *  wordsPerCaption changes. */
+  function rebuildGroups() {
     if (!transcript) return;
+    groups = L.groupWords(transcript.words, settings.wordsPerCaption);
+    renderCaptionList();
+  }
+
+  /** Re-lay out the held groups with current visual settings. */
+  function rebuildCaptions() {
+    if (!groups) return;
     const aspect = (video.videoWidth && video.videoHeight)
       ? video.videoWidth / video.videoHeight
       : 16 / 9;
 
-    captions = L.buildCaptions(transcript.words, {
+    captions = L.layoutCaptions(groups, {
       fontFamily:      settings.fontFamily,
-      wordsPerCaption: settings.wordsPerCaption,
       trackingEm:      settings.trackingEm,
       sizeScale:       settings.sizeScale,
       aspect,
+      safeArea:        settings.safeArea,
+      brandColors:     settings.brandColors,
     });
     if (renderer) renderer.state.captions = captions;
   }
+
+  // =====================================================================
+  // Caption editor (sidebar)
+  //   Each Whisper-grouped caption becomes one editable row. Editing the
+  //   text preserves the caption's original [start, end] span and
+  //   redistributes timing evenly across the new word list — so the
+  //   user can fix transcription mistakes without the audio drifting.
+  // =====================================================================
+  const captionListEl = document.getElementById('captionList');
+
+  function renderCaptionList() {
+    captionListEl.innerHTML = '';
+    if (!groups || !groups.length) {
+      const empty = document.createElement('div');
+      empty.className = 'caption-empty';
+      empty.textContent = 'drop a video to edit captions';
+      captionListEl.appendChild(empty);
+      return;
+    }
+    groups.forEach((g, i) => {
+      const row = document.createElement('div');
+      row.className = 'cap-row';
+      row.dataset.idx = i;
+
+      const time = document.createElement('span');
+      time.className = 'cap-time';
+      time.textContent = U.fmtTime(g[0]?.s ?? 0);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'cap-text';
+      input.value = g.map(w => w.w).join(' ');
+      input.spellcheck = false;
+      const commit = () => {
+        if (input.value !== g.map(w => w.w).join(' ')) {
+          updateCaptionText(i, input.value);
+        }
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      });
+
+      row.appendChild(time);
+      row.appendChild(input);
+      captionListEl.appendChild(row);
+    });
+  }
+
+  function updateCaptionText(idx, text) {
+    const original = groups[idx];
+    if (!original?.length) return;
+    const start = original[0].s;
+    const end   = original[original.length - 1].e;
+    const span  = Math.max(0.1, end - start);
+    const wordList = text.trim().split(/\s+/).filter(Boolean);
+    if (!wordList.length) {
+      // Refuse empty — just restore the list UI to the existing group.
+      renderCaptionList();
+      return;
+    }
+    const perWord = span / wordList.length;
+    groups[idx] = wordList.map((w, i) => ({
+      w,
+      s: start + i * perWord,
+      e: start + (i + 1) * perWord,
+    }));
+    rebuildCaptions();
+  }
+
+  // =====================================================================
+  // Brand colors (sidebar)
+  // =====================================================================
+  const brandListEl    = document.getElementById('brandList');
+  const brandAddWordEl = document.getElementById('brandAddWord');
+  const brandAddColorEl = document.getElementById('brandAddColor');
+  const brandAddBtn    = document.getElementById('brandAdd');
+
+  function renderBrandList() {
+    brandListEl.innerHTML = '';
+    const entries = Object.entries(settings.brandColors);
+    entries.forEach(([word, color]) => {
+      const row = document.createElement('div');
+      row.className = 'brand-row';
+
+      const wi = document.createElement('input');
+      wi.type = 'text';
+      wi.className = 'brand-word';
+      wi.value = word;
+      wi.spellcheck = false;
+      wi.addEventListener('change', () => {
+        const next = wi.value.trim().toLowerCase();
+        if (!next || next === word) return;
+        delete settings.brandColors[word];
+        settings.brandColors[next] = color;
+        renderBrandList();
+        rebuildCaptions();
+      });
+
+      const ci = document.createElement('input');
+      ci.type = 'color';
+      ci.className = 'brand-color';
+      ci.value = color;
+      ci.addEventListener('input', () => {
+        settings.brandColors[word] = ci.value;
+        rebuildCaptions();
+      });
+
+      const del = document.createElement('button');
+      del.className = 'brand-del';
+      del.textContent = '×';
+      del.setAttribute('aria-label', `remove ${word}`);
+      del.addEventListener('click', () => {
+        delete settings.brandColors[word];
+        renderBrandList();
+        rebuildCaptions();
+      });
+
+      row.appendChild(wi);
+      row.appendChild(ci);
+      row.appendChild(del);
+      brandListEl.appendChild(row);
+    });
+  }
+
+  function addBrandColor() {
+    const w = brandAddWordEl.value.trim().toLowerCase();
+    if (!w) return;
+    settings.brandColors[w] = brandAddColorEl.value;
+    brandAddWordEl.value = '';
+    renderBrandList();
+    rebuildCaptions();
+  }
+  brandAddBtn.addEventListener('click', addBrandColor);
+  brandAddWordEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addBrandColor(); }
+  });
+  renderBrandList();
 
   // =====================================================================
   // 2. Drop zone
@@ -259,6 +433,8 @@
 
   wireRange('wordsRange', 'wordsVal', v => `${v}`, v => {
     settings.wordsPerCaption = v;
+    // Regroup from the raw transcript — wipes any in-panel caption edits.
+    rebuildGroups();
     rebuildCaptions();
   });
 
@@ -283,6 +459,21 @@
     rebuildCaptions();
   });
 
+  // Safe-area controls.
+  const toggleSafeBtn = document.getElementById('toggleSafeBtn');
+  const resetSafeBtn  = document.getElementById('resetSafeBtn');
+  const safeAreaEl    = document.getElementById('safeArea');
+  let safeVisible = true;
+  toggleSafeBtn.addEventListener('click', () => {
+    safeVisible = !safeVisible;
+    safeAreaEl.style.display = safeVisible ? '' : 'none';
+    toggleSafeBtn.textContent = safeVisible ? 'hide box' : 'show box';
+  });
+  resetSafeBtn.addEventListener('click', () => {
+    if (!safeAreaCtl) return;
+    safeAreaCtl.set({ ...TA.layout.DEFAULT_SAFE_AREA });
+  });
+
   resetBtn.addEventListener('click', () => {
     // Go back to dropzone.
     cancelAnimationFrame(rafId);
@@ -291,8 +482,10 @@
     video.removeAttribute('src');
     video.load();
     transcript = null;
+    groups = null;
     captions = [];
     if (renderer) renderer.state.captions = [];
+    renderCaptionList();
     preview.classList.add('hidden');
     dropzone.classList.remove('hidden');
     exportBtn.disabled = true;

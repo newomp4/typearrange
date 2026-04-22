@@ -34,7 +34,23 @@
       <div id="preview" class="preview hidden">
         <!-- The video plays invisibly. Canvas is the composited output. -->
         <video id="video" playsinline preload="auto"></video>
-        <canvas id="canvas"></canvas>
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="canvas"></canvas>
+          <!-- Safe-area overlay: absolutely positioned over the canvas.
+               The four .handle elements are the corner-grab points. -->
+          <div class="safe-area" id="safeArea">
+            <div class="safe-area-box" id="safeBox">
+              <span class="handle" data-corner="tl"></span>
+              <span class="handle" data-corner="tr"></span>
+              <span class="handle" data-corner="bl"></span>
+              <span class="handle" data-corner="br"></span>
+              <span class="edge edge-t" data-edge="t"></span>
+              <span class="edge edge-b" data-edge="b"></span>
+              <span class="edge edge-l" data-edge="l"></span>
+              <span class="edge edge-r" data-edge="r"></span>
+            </div>
+          </div>
+        </div>
 
         <div class="transport">
           <button id="playBtn" class="btn-icon" aria-label="Play/pause">▶</button>
@@ -91,7 +107,7 @@
 
       <div class="panel-section">
         <div class="row">
-          <label>squash &amp; stretch</label>
+          <label>smear</label>
           <span class="val" id="squashVal">0.6</span>
         </div>
         <input type="range" id="squashRange" min="0" max="100" step="1" value="60" />
@@ -103,6 +119,31 @@
           <span class="val" id="sizeVal">1.0×</span>
         </div>
         <input type="range" id="sizeRange" min="50" max="180" step="1" value="100" />
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">safe area</div>
+        <div class="actions" style="margin-top: 4px">
+          <button id="toggleSafeBtn" class="btn">show box</button>
+          <button id="resetSafeBtn" class="btn">reset box</button>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">captions</div>
+        <div id="captionList" class="caption-list">
+          <div class="caption-empty">drop a video to edit captions</div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">brand colors</div>
+        <div id="brandList" class="brand-list"></div>
+        <div class="brand-add-row">
+          <input type="text" id="brandAddWord" placeholder="word (e.g. robinhood)" class="brand-word" />
+          <input type="color" id="brandAddColor" value="#00ff41" class="brand-color" />
+          <button id="brandAdd" class="brand-add-btn" aria-label="add brand color">+</button>
+        </div>
       </div>
 
       <div class="panel-section actions">
@@ -127,6 +168,7 @@
   <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
   <script src="{{ url_for('static', filename='js/layout.js') }}"></script>
   <script src="{{ url_for('static', filename='js/animation.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/safearea.js') }}"></script>
   <script src="{{ url_for('static', filename='js/renderer.js') }}"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

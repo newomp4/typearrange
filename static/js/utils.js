@@ -104,6 +104,9 @@ TA.utils = (() => {
     outCubic:  t => 1 - Math.pow(1 - t, 3),
     outBack:   (t, s = 1.70158) => 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2),
     outQuint:  t => 1 - Math.pow(1 - t, 5),
+    // Circ-out: very fast start, rapid deceleration into the end.
+    // The exact feel the user wanted for the smear-to-settle transition.
+    outCirc:   t => Math.sqrt(1 - (t - 1) * (t - 1)),
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }

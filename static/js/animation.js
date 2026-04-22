@@ -3,22 +3,22 @@
  * Two ideas here:
  *
  *   (a) LOW-FPS POSTERIZATION
- *       Real animation runs at 60fps in the browser, but we quantize time
- *       to a coarse framerate (e.g. 12fps) so the motion looks stop-motion
- *       / motion-graphic.  Done by snapping:
+ *       Browser paints at 60fps but we snap the *time* we feed to the
+ *       animation math to a coarser framerate. This gives the stepped,
+ *       stop-motion / motion-graphic feel:
  *           t' = floor(t * fps) / fps
  *
- *   (b) SQUASH & STRETCH POP-IN
- *       A word's transform over its animation lifetime (~300ms from the
- *       caption start) goes:
- *           scaleX:  1.45  -> 0.90  -> 1.00
- *           scaleY:  0.55  -> 1.10  -> 1.00
- *       Squash first (wide & flat), overshoot thin & tall, settle.
- *       The amount is scaled by a user-controlled "strength" parameter.
+ *   (b) ENTRANCE VARIANTS
+ *       Each word picks one of several entrance styles deterministically
+ *       from its dirSeed. Positional slides dominate (the word travels
+ *       into its target from an offset with no scale), and scale-based
+ *       styles — a subtle pop and the original x-smear — appear as
+ *       flavour so no two consecutive words land the same way.
  *
- * Per-word start is staggered by a small delay after the caption's start
- * time so words cascade in — but the stagger is itself quantized to the
- * posterize fps so it still reads as stepped.
+ *       All variants share the same timing window: u goes 0→1 across
+ *       POP_IN_DURATION using easeOutCirc (fast start, hard brake). The
+ *       "remain" factor (1-u) is what each variant multiplies against
+ *       its own offset/scale peaks so the word always settles at target.
  */
 'use strict';
 
@@ -26,14 +26,41 @@ TA.animation = (() => {
   const U = TA.utils;
 
   /** Default animation tuning. */
-  const POP_IN_DURATION    = 0.28;   // seconds
-  const STAGGER_PER_WORD   = 0.04;   // seconds
+  const POP_IN_DURATION    = 0.30;   // seconds total entrance→settle
+  const STAGGER_PER_WORD   = 0.045;  // seconds between words in a caption
 
-  /**
-   * Snap t to the posterized framerate.
-   * @param {number} t    seconds
-   * @param {number} fps  snapping framerate (4..30)
-   */
+  /** Offset peaks (fractions of video width / height). */
+  const OFFSET_X_FRAC      = 0.09;
+  const OFFSET_Y_FRAC      = 0.055;
+
+  /** Peak scale smear values at strength = 1.0. */
+  const MAX_STRETCH        = 1.90;
+  const MAX_SQUISH         = 0.70;
+
+  /** Variant table: weighted so positional slides dominate and scale
+   *  styles (pop / x-smear) are a flavour accent rather than the default.
+   *  Weights don't need to sum to any particular total. */
+  const VARIANTS = [
+    { name: 'slide-left',  weight: 3 },
+    { name: 'slide-right', weight: 3 },
+    { name: 'slide-up',    weight: 2 },
+    { name: 'slide-down',  weight: 2 },
+    { name: 'pop',         weight: 2 },  // subtle 95% → 100%
+    { name: 'smear-x',     weight: 1 },  // the original x-stretch smear
+  ];
+  const _VARIANT_TOTAL = VARIANTS.reduce((s, v) => s + v.weight, 0);
+
+  function pickVariant(seed) {
+    // Map the 32-bit seed to [0, total) deterministically.
+    let r = ((seed >>> 0) / 0x100000000) * _VARIANT_TOTAL;
+    for (const v of VARIANTS) {
+      r -= v.weight;
+      if (r <= 0) return v.name;
+    }
+    return VARIANTS[0].name;
+  }
+
+  /** Snap t to the posterized framerate. */
   function posterize(t, fps) {
     if (fps >= 60) return t;
     return Math.floor(t * fps) / fps;
@@ -42,69 +69,84 @@ TA.animation = (() => {
   /**
    * Compute per-word transform at time `t`.
    *
-   * @param {object} word        word entry from layout (has s, e)
-   * @param {number} captionStart  the caption's global start time
-   * @param {number} wordIndex   index of this word within its caption (for stagger)
-   * @param {number} t           current playback time (seconds)
-   * @param {number} strength    squash-and-stretch strength 0..1
-   * @returns {{ alpha:number, scaleX:number, scaleY:number }}
+   * @param {object} word         word entry from layout
+   * @param {number} captionStart caption's global start time
+   * @param {number} wordIndex    index of this word within its caption
+   * @param {number} t            playback time (posterized)
+   * @param {number} strength     0..1 — dials smear amount (affects
+   *                              scale-based variants only)
+   * @param {number} dirSeed      hash int — picks variant + direction
+   * @returns {{ alpha:number, tx:number, ty:number, scaleX:number, scaleY:number }}
+   *   tx / ty are in *fractions of video width/height* respectively.
    */
-  function transformAt(word, captionStart, wordIndex, t, strength) {
+  function transformAt(word, captionStart, wordIndex, t, strength, dirSeed) {
     const popStart = captionStart + wordIndex * STAGGER_PER_WORD;
     const popEnd   = popStart + POP_IN_DURATION;
 
     if (t < popStart) {
-      return { alpha: 0, scaleX: 1, scaleY: 1 };
+      return { alpha: 0, tx: 0, ty: 0, scaleX: 1, scaleY: 1 };
     }
-
     if (t >= popEnd) {
-      // Settled. (Exit anim is handled by alpha fade past word.e.)
-      return { alpha: 1, scaleX: 1, scaleY: 1 };
+      return { alpha: 1, tx: 0, ty: 0, scaleX: 1, scaleY: 1 };
     }
 
-    // Normalize t into 0..1 across pop-in.
-    const u = (t - popStart) / POP_IN_DURATION;
+    // Raw progress 0..1 across the pop-in window.
+    const uRaw = (t - popStart) / POP_IN_DURATION;
+    // easeOutCirc: fast start, hard brake at the end.
+    const u = U.easing.outCirc(uRaw);
+    const remain = 1 - u;
 
-    // Split pop-in into two phases:
-    //   0.00 .. 0.55  :  squash (wide/short) -> overshoot (narrow/tall)
-    //   0.55 .. 1.00  :  overshoot -> settle
-    let scaleX, scaleY;
-    if (u < 0.55) {
-      const k = u / 0.55;
-      // squash (1.45, 0.55)  ->  overshoot (0.90, 1.10)
-      scaleX = U.lerp(1.45, 0.90, U.easing.outCubic(k));
-      scaleY = U.lerp(0.55, 1.10, U.easing.outCubic(k));
-    } else {
-      const k = (u - 0.55) / 0.45;
-      scaleX = U.lerp(0.90, 1.00, U.easing.outBack(k));
-      scaleY = U.lerp(1.10, 1.00, U.easing.outBack(k));
+    const variant = pickVariant(dirSeed);
+
+    let tx = 0, ty = 0, scaleX = 1, scaleY = 1;
+
+    switch (variant) {
+      case 'slide-left':
+        tx = -OFFSET_X_FRAC * remain;
+        break;
+      case 'slide-right':
+        tx =  OFFSET_X_FRAC * remain;
+        break;
+      case 'slide-up':
+        ty = -OFFSET_Y_FRAC * remain;
+        break;
+      case 'slide-down':
+        ty =  OFFSET_Y_FRAC * remain;
+        break;
+      case 'pop': {
+        // Subtle 95% → 100% scale, no translation. Strength still dials
+        // the intensity so the smear slider affects this variant too.
+        const s = U.lerp(1, 0.95, remain * strength);
+        scaleX = s;
+        scaleY = s;
+        break;
+      }
+      case 'smear-x': {
+        // Classic x-stretch smear: enters from a side, stretched wide and
+        // thinned vertically, brakes into place.
+        const dir = ((dirSeed >>> 1) & 1) ? 1 : -1;
+        tx = -dir * OFFSET_X_FRAC * remain;
+        scaleX = U.lerp(1, MAX_STRETCH, remain * strength);
+        scaleY = U.lerp(1, MAX_SQUISH,  remain * strength);
+        break;
+      }
     }
 
-    // Dial strength toward 1 (no squash).
-    scaleX = U.lerp(1.0, scaleX, strength);
-    scaleY = U.lerp(1.0, scaleY, strength);
+    // Alpha: fade in quickly (full opacity by uRaw=0.3).
+    const alpha = U.clamp(uRaw / 0.3, 0, 1);
 
-    // Alpha fades in quickly, front-loaded.
-    const alpha = U.clamp(u / 0.35, 0, 1);
-
-    return { alpha, scaleX, scaleY };
+    return { alpha, tx, ty, scaleX, scaleY };
   }
 
-  /**
-   * Is this caption visible at time t? (Covers pop-in lead-time + exit tail.)
-   */
   function captionActive(cap, t) {
     const enterLead = 0.15;
     const exitTail  = 0.05;
     return t >= cap.start - enterLead && t <= cap.end + exitTail;
   }
 
-  /** Compute caption-level alpha — fades out near the end. */
   function captionAlpha(cap, t) {
     const fadeOut = 0.18;
-    if (t > cap.end) {
-      return U.clamp(1 - (t - cap.end) / fadeOut, 0, 1);
-    }
+    if (t > cap.end) return U.clamp(1 - (t - cap.end) / fadeOut, 0, 1);
     return 1;
   }
 

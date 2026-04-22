@@ -38,7 +38,9 @@ TA.renderer = (() => {
       showBounds:    false,
     };
 
-    /** Size the canvas to match the video's intrinsic dimensions. */
+    /** Size the canvas' drawing surface to the video's intrinsic dimensions
+     *  and tell the wrapper element what aspect-ratio to maintain, so the
+     *  safe-area overlay lines up with the visible canvas. */
     function syncSize() {
       if (!video.videoWidth || !video.videoHeight) return false;
       if (canvas.width === video.videoWidth && canvas.height === video.videoHeight) {
@@ -46,6 +48,10 @@ TA.renderer = (() => {
       }
       canvas.width  = video.videoWidth;
       canvas.height = video.videoHeight;
+      const wrap = canvas.parentElement;
+      if (wrap) {
+        wrap.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+      }
       return true;
     }
 
@@ -98,10 +104,11 @@ TA.renderer = (() => {
       if (!active.length) return;
 
       // Set composite op once per draw pass (it resets via save/restore).
+      // fillStyle is set per-word below so brand-coloured words can tint
+      // through the same blend mode as white words.
       ctx.save();
       const op = state.blendMode === 'none' ? 'source-over' : state.blendMode;
       ctx.globalCompositeOperation = op;
-      ctx.fillStyle = '#ffffff';
       ctx.textBaseline = 'alphabetic';
       ctx.textAlign = 'left';
 
@@ -117,7 +124,8 @@ TA.renderer = (() => {
 
         for (let i = 0; i < cap.words.length; i++) {
           const wd = cap.words[i];
-          const { alpha, scaleX, scaleY } = A.transformAt(wd, cap.start, i, t, state.squash);
+          const { alpha, tx, ty, scaleX, scaleY } =
+            A.transformAt(wd, cap.start, i, t, state.squash, wd.dirSeed || i);
           if (alpha <= 0) continue;
 
           const fontPx = wd.sizeNH * H;
@@ -125,14 +133,21 @@ TA.renderer = (() => {
           const y  = wd.yBaseline * H;
           const wPx = wd.widthFrac * W;
 
-          // Pivot at the word's visual center so squash/stretch looks right.
-          const cx = x + wPx / 2;
-          const cy = y - fontPx * 0.4;   // rough vertical mid of glyphs
+          // Pivot at the word's visual center (for the stretch) and add
+          // the animation offset (which is in normalized width/height).
+          const cx   = x + wPx / 2;
+          const cy   = y - fontPx * 0.4;
+          const txPx = tx * W;
+          const tyPx = ty * H;
 
           ctx.save();
           ctx.globalAlpha = alpha * capAlpha;
+          ctx.fillStyle = wd.color || '#ffffff';
 
-          ctx.translate(cx, cy);
+          // Order: translate(pivot + offset) → scale → translate(-pivot) →
+          // fillText at (x, y). Result: pure translation by (tx, ty) plus
+          // a stretch around the pivot.
+          ctx.translate(cx + txPx, cy + tyPx);
           ctx.scale(scaleX, scaleY);
           ctx.translate(-cx, -cy);
 
