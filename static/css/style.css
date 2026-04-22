@@ -510,9 +510,18 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   flex-shrink: 0;
 }
 .cap-btn:hover { border-color: var(--fg); color: var(--fg); }
-.cap-min.active {
-  background: var(--fg);
+.cap-preset {
+  min-width: 60px;
+  padding: 0 6px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.cap-preset[data-preset="motion"]     { color: var(--fg-dim); }
+.cap-preset[data-preset="minimal"]    { color: var(--fg); border-color: var(--fg); }
+.cap-preset[data-preset="typewriter"] { color: var(--fg); border-color: var(--fg-dim); border-style: dashed; }
+.cap-preset[data-preset="split"] {
   color: #000;
+  background: var(--fg);
   border-color: var(--fg);
 }
 .cap-add { font-size: 13px; line-height: 1; }

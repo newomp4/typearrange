@@ -124,7 +124,7 @@ TA.renderer = (() => {
 
         for (let i = 0; i < cap.words.length; i++) {
           const wd = cap.words[i];
-          const { alpha, tx, ty, scaleX, scaleY } =
+          const { alpha, tx, ty, scaleX, scaleY, revealFrac = 1 } =
             A.transformAt(wd, t, state.squash, wd.dirSeed || i, !!wd.boring);
           if (alpha <= 0) continue;
 
@@ -147,6 +147,23 @@ TA.renderer = (() => {
           ctx.save();
           ctx.globalAlpha = alpha * capAlpha;
           ctx.fillStyle = wd.color || '#ffffff';
+
+          // Typewriter preset reveals the ink progressively left-to-right.
+          // Clip BEFORE applying the transform so the clip rectangle is
+          // measured in untransformed canvas pixels — otherwise the
+          // scale applied for smear variants would warp the clip too.
+          // Add a little vertical slack so ascenders / descenders aren't
+          // chopped when the reveal is narrow.
+          if (revealFrac < 1) {
+            ctx.beginPath();
+            ctx.rect(
+              x - 2,
+              y - fontPx * 1.2,
+              wPx * revealFrac + 4,
+              fontPx * 1.5,
+            );
+            ctx.clip();
+          }
 
           // Order: translate(pivot + offset) → scale → translate(-pivot) →
           // fillText at (drawOriginX, y). Result: pure translation by

@@ -319,7 +319,8 @@ TA.layout = (() => {
     return {
       start,
       end,
-      preset,
+      preset: opts.preset || preset,
+      layoutPreset: preset,
       rows: laidOutRows,
       boring: !!boring,
       words: laidOutRows.flatMap((r, ri) => r.words.map((p, wi) => ({
@@ -337,6 +338,7 @@ TA.layout = (() => {
         e: p.item.e,
         color: p.item.color,
         boring: !!boring,
+        preset: opts.preset || 'motion',
         // Per-word direction seed: alternates by row, flipped per caption,
         // so within a caption words come from varied sides but it still
         // reads as intentional.
@@ -346,20 +348,98 @@ TA.layout = (() => {
   }
 
   // ------------------------------------------------------------------
+  // 4.5. Split-around-object preset.
+  //
+  //      The safe area is cut into a left half and a right half with a
+  //      centred gap. The caption's words are split by midpoint — the
+  //      first half lives in the left region, the rest in the right —
+  //      so whatever the user framed between them (a person, a phone,
+  //      the "dog" in the user's brief) visually separates the phrase.
+  //
+  //      The two sub-layouts are real layoutCaption() calls with their
+  //      own narrowed safe-area, so all the normal spacing / ink
+  //      alignment / clash detection still applies. We flatten the
+  //      resulting words / rows into a single caption output so the
+  //      renderer treats it as one caption.
+  // ------------------------------------------------------------------
+  const SPLIT_CENTER_GAP_FRAC = 0.20;  // fraction of safe width kept empty
+
+  function layoutSplitCaption(group, opts, seedInt) {
+    // Split words by index midpoint. For 5 words → left: 2, right: 3.
+    const n = group.length;
+    const midIdx = Math.ceil(n / 2);
+    const leftWords  = group.slice(0, midIdx);
+    const rightWords = group.slice(midIdx);
+
+    const halfW = opts.safeW * (1 - SPLIT_CENTER_GAP_FRAC) / 2;
+    // Each sub-region's centre sits halfway between the outer safe-area
+    // edge and the central gap — i.e. the middle of its half.
+    const leftCX  = opts.safeCX - opts.safeW / 2 + halfW / 2;
+    const rightCX = opts.safeCX + opts.safeW / 2 - halfW / 2;
+
+    const subOpts = (cx) => ({
+      ...opts,
+      safeCX: cx,
+      safeW: halfW,
+      // Narrow the allowed row width to stay inside the half.
+      maxRowWidthFrac: halfW * 0.98,
+      // The two halves themselves align to their own region's centre.
+      alignment: 'center',
+      // Don't recurse back into split or minimal — halves use motion.
+      preset: 'motion',
+      boring: false,
+    });
+
+    const leftOut  = leftWords.length  ? layoutCaption(leftWords,  subOpts(leftCX),  seedInt ^ 0x1) : null;
+    const rightOut = rightWords.length ? layoutCaption(rightWords, subOpts(rightCX), seedInt ^ 0x2) : null;
+
+    const parts = [leftOut, rightOut].filter(Boolean);
+    // Fall back to a plain motion caption if both halves came out empty.
+    if (!parts.length) {
+      return layoutCaption(group, { ...opts, preset: 'motion', boring: false }, seedInt);
+    }
+
+    const start = group[0].s;
+    const lastWord = group[group.length - 1];
+    const POP_IN = 0.30;
+    const end = Math.max(
+      ...parts.map(p => p.end),
+      lastWord.e,
+      lastWord.s + POP_IN,
+    );
+
+    return {
+      start,
+      end,
+      preset: 'split',
+      layoutPreset: 'split',
+      boring: false,
+      rows:  parts.flatMap(p => p.rows),
+      // Tag every word as preset=split so animations can dispatch.
+      words: parts.flatMap(p => p.words.map(w => ({ ...w, preset: 'split' }))),
+    };
+  }
+
+  // ------------------------------------------------------------------
   // 5. Entry point.
   // ------------------------------------------------------------------
 
   const DEFAULT_SAFE_AREA = { x0: 0.08, y0: 0.18, x1: 0.92, y1: 0.82 };
+
+  /** Recognised per-caption presets. A caption group can carry `.preset`
+   *  to select one of these; `.boring = true` is kept as a legacy
+   *  alias for 'minimal'. Unknown preset names fall back to 'motion'. */
+  const PRESETS_PER_CAPTION = new Set(['motion', 'minimal', 'typewriter', 'split']);
 
   /** Lay out already-grouped captions. Split out from buildCaptions so
    *  the UI can hold its own mutable group list (for edited captions)
    *  and call this whenever visual settings change.
    *
    *  Groups can carry:
-   *    - `.boring = true` — each word in the group is expanded into its
-   *      own 1-word caption (so only one word shows at a time), rendered
-   *      with a minimal subtle-pop animation. Used for calmer moments
-   *      that don't need the full motion-graphic smear.
+   *    - `.preset` — one of 'motion', 'minimal', 'typewriter', 'split'
+   *      (see the Cluster preset table). Drives both layout and the
+   *      animation variant each word uses.
+   *    - `.boring = true` — legacy; equivalent to preset='minimal'.
    *    - length 0 — empty/new caption placeholder, filtered out.
    */
   function layoutCaptions(groups, settings) {
@@ -383,34 +463,68 @@ TA.layout = (() => {
     const baseSize = 0.09 * (safeH / 0.64);
     const maxRowWidthFrac = safeW * 0.98;
 
-    // Expand boring groups into 1-word sub-groups; drop empties.
+    // Expand into ready-to-lay-out groups. Each keeps a resolved
+    // `_preset` so layoutCaption can dispatch without re-resolving.
     const expanded = [];
     for (const g of groups) {
       if (!g || g.length === 0) continue;
-      if (g.boring) {
+      // Resolve preset: explicit .preset wins, .boring is the legacy
+      // alias for 'minimal', default is 'motion'.
+      const raw = g.preset || (g.boring ? 'minimal' : 'motion');
+      const preset = PRESETS_PER_CAPTION.has(raw) ? raw : 'motion';
+
+      if (preset === 'minimal') {
+        // 'minimal' renders one word at a time, so split the group.
         for (const w of g) {
           const single = [w];
-          single.boring = true;
+          single._preset = 'minimal';
           expanded.push(single);
         }
       } else {
-        expanded.push(g);
+        const clone = Array.from(g);
+        clone._preset = preset;
+        expanded.push(clone);
       }
     }
 
-    return expanded.map((g, i) => layoutCaption(g, {
-      fontFamily,
-      baseSize,
-      tracking: trackingEm,
-      maxRowWidthFrac,
-      sizeScale,
-      aspect,
-      safeCX, safeCY, safeW, safeH,
-      brandColors,
-      wordGapEm,
-      alignment,
-      boring: !!g.boring,
-    }, U.hash32(`${i}-${fontFamily}-${g[0]?.w || ''}`)));
+    const laidOut = expanded.map((g, i) => {
+      const opts = {
+        fontFamily,
+        baseSize,
+        tracking: trackingEm,
+        maxRowWidthFrac,
+        sizeScale,
+        aspect,
+        safeCX, safeCY, safeW, safeH,
+        brandColors,
+        wordGapEm,
+        alignment,
+        preset: g._preset || 'motion',
+        boring: g._preset === 'minimal',
+      };
+      const seed = U.hash32(`${i}-${fontFamily}-${g[0]?.w || ''}`);
+      if (g._preset === 'split') {
+        return layoutSplitCaption(g, opts, seed);
+      }
+      return layoutCaption(g, opts, seed);
+    });
+
+    // Clamp each caption's end so the fade completes before the next
+    // caption's first word starts popping in. Must stay in sync with
+    // animation.FADE_OUT — duplicated here to keep the modules decoupled
+    // (layout shouldn't have to reach into animation at build time).
+    const FADE_OUT = 0.06;
+    const BUFFER   = 0.02;   // tiny gap so captions don't visibly touch
+    for (let i = 0; i < laidOut.length - 1; i++) {
+      const maxEnd = laidOut[i + 1].start - FADE_OUT - BUFFER;
+      if (laidOut[i].end > maxEnd) {
+        // Don't clamp below the caption's own start — if two captions
+        // land basically on top of each other, let the next one win
+        // rather than give a negative-duration window.
+        laidOut[i].end = Math.max(laidOut[i].start, maxEnd);
+      }
+    }
+    return laidOut;
   }
 
   function buildCaptions(transcriptWords, settings) {

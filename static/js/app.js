@@ -294,16 +294,26 @@
         if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
       });
 
-      // "min" — toggle boring mode on this caption.
-      const minBtn = document.createElement('button');
-      minBtn.className = 'cap-btn cap-min' + (g.boring ? ' active' : '');
-      minBtn.textContent = 'min';
-      minBtn.title = 'minimal animation (1 word at a time)';
-      minBtn.setAttribute('aria-pressed', g.boring ? 'true' : 'false');
-      minBtn.addEventListener('click', () => {
-        g.boring = !g.boring;
-        minBtn.classList.toggle('active', !!g.boring);
-        minBtn.setAttribute('aria-pressed', g.boring ? 'true' : 'false');
+      // Preset cycle — each click moves to the next preset in the list.
+      // Labels are shown as-is in the button so the user sees the current
+      // style at a glance without needing a tooltip.
+      const CAPTION_PRESETS = ['motion', 'minimal', 'typewriter', 'split'];
+      // Resolve current preset: explicit .preset wins, .boring legacy
+      // alias maps to 'minimal'.
+      const currentPreset = () => g.preset || (g.boring ? 'minimal' : 'motion');
+      const presetBtn = document.createElement('button');
+      presetBtn.className = 'cap-btn cap-preset';
+      presetBtn.dataset.preset = currentPreset();
+      presetBtn.textContent = currentPreset();
+      presetBtn.title = 'caption style — click to cycle';
+      presetBtn.addEventListener('click', () => {
+        const idx = CAPTION_PRESETS.indexOf(currentPreset());
+        const next = CAPTION_PRESETS[(idx + 1) % CAPTION_PRESETS.length];
+        g.preset = next;
+        // Clear the legacy `boring` flag so it doesn't fight the preset.
+        delete g.boring;
+        presetBtn.dataset.preset = next;
+        presetBtn.textContent = next;
         rebuildCaptions();
       });
 
@@ -323,7 +333,7 @@
 
       row.appendChild(time);
       row.appendChild(input);
-      row.appendChild(minBtn);
+      row.appendChild(presetBtn);
       row.appendChild(addBtn);
       row.appendChild(delBtn);
       captionListEl.appendChild(row);
@@ -358,8 +368,9 @@
       s: start + i * perWord,
       e: start + (i + 1) * perWord,
     }));
-    // Preserve per-group metadata (boring flag, etc.).
+    // Preserve per-group metadata (preset, legacy boring flag, etc.).
     next.boring = !!original.boring;
+    if (original.preset) next.preset = original.preset;
     groups[idx] = next;
     rebuildCaptions();
   }

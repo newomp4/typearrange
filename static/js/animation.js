@@ -86,6 +86,24 @@ TA.animation = (() => {
    * @returns {{ alpha:number, tx:number, ty:number, scaleX:number, scaleY:number }}
    *   tx / ty are in *fractions of video width/height* respectively.
    */
+  /** Resolve variant from the caption's preset. Motion uses the
+   *  weighted random pool, minimal + typewriter + split override. */
+  function variantForPreset(preset, dirSeed) {
+    switch (preset) {
+      case 'minimal':    return 'pop-subtle';
+      case 'typewriter': return 'typewriter';
+      case 'split': {
+        // Words on the left slide in from the left, words on the right
+        // from the right, leaning into the "text wraps around a centre
+        // object" feel. We don't know left/right from inside animation,
+        // so use dirSeed parity as a proxy — it's deterministic per word.
+        return ((dirSeed >>> 0) & 1) ? 'slide-right' : 'slide-left';
+      }
+      default:
+        return pickVariant(dirSeed);
+    }
+  }
+
   function transformAt(word, t, strength, dirSeed, boring = false) {
     const popStart = word.s;
     const popEnd   = popStart + POP_IN_DURATION;
@@ -101,7 +119,10 @@ TA.animation = (() => {
     const u = U.easing.outCirc(uRaw);
     const remain = 1 - u;
 
-    const variant = boring ? 'pop-subtle' : pickVariant(dirSeed);
+    // Preset-driven variant wins; `boring` is kept as a back-compat alias
+    // for minimal since earlier versions used it directly.
+    const preset = word.preset || (boring ? 'minimal' : 'motion');
+    const variant = variantForPreset(preset, dirSeed);
 
     let tx = 0, ty = 0, scaleX = 1, scaleY = 1;
 
@@ -119,20 +140,26 @@ TA.animation = (() => {
         ty =  OFFSET_Y_FRAC * remain;
         break;
       case 'pop': {
-        // Subtle 95% → 100% scale, no translation. Strength dials
-        // intensity so the smear slider affects this variant too.
         const s = U.lerp(1, 0.95, remain * strength);
         scaleX = s;
         scaleY = s;
         break;
       }
       case 'pop-subtle': {
-        // Minimal 97% → 100% pop. Intentionally ignores `strength` —
-        // boring mode is the "calm" setting, so it should stay calm
-        // even when the user has the smear slider cranked.
+        // Minimal 97% → 100% pop. Intentionally ignores `strength`.
         const s = U.lerp(0.97, 1, u);
         scaleX = s;
         scaleY = s;
+        break;
+      }
+      case 'typewriter': {
+        // Snap-up from below with linear easing — the word enters with
+        // a quick, mechanical feel rather than the braking smear of
+        // the motion preset. Renderer clips ink progressively
+        // left-to-right via word.preset === 'typewriter' for the full
+        // "carriage return" flavour.
+        const linearRemain = 1 - uRaw;
+        ty = -OFFSET_Y_FRAC * 0.5 * linearRemain;
         break;
       }
       case 'smear-x': {
@@ -146,7 +173,12 @@ TA.animation = (() => {
 
     const alpha = U.clamp(uRaw / 0.3, 0, 1);
 
-    return { alpha, tx, ty, scaleX, scaleY };
+    // Typewriter passes back a reveal fraction so the renderer can clip
+    // the word to show it growing left-to-right (like a cursor walking
+    // across the word). Other variants don't need it.
+    const revealFrac = variant === 'typewriter' ? uRaw : 1;
+
+    return { alpha, tx, ty, scaleX, scaleY, revealFrac };
   }
 
   function captionActive(cap, t) {
@@ -158,11 +190,16 @@ TA.animation = (() => {
     return t >= cap.start - enterLead && t <= cap.end + exitTail;
   }
 
+  /** Fade duration in seconds. Short by design — captions are now
+   *  clamped in layout so end + FADE_OUT is always <= next.start,
+   *  meaning the fade completes before the next caption's first word
+   *  begins popping in. */
+  const FADE_OUT = 0.06;
+
   function captionAlpha(cap, t) {
-    const fadeOut = 0.12;
-    if (t > cap.end) return U.clamp(1 - (t - cap.end) / fadeOut, 0, 1);
+    if (t > cap.end) return U.clamp(1 - (t - cap.end) / FADE_OUT, 0, 1);
     return 1;
   }
 
-  return { posterize, transformAt, captionActive, captionAlpha };
+  return { posterize, transformAt, captionActive, captionAlpha, FADE_OUT };
 })();
