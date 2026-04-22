@@ -34,11 +34,51 @@
     squash:          0.6,
     sizeScale:       1.0,
     safeArea:        { ...TA.layout.DEFAULT_SAFE_AREA },
-    /** Map of bare-lowercase word → hex colour. Applied per-word in
-     *  layout so matching words render in the chosen colour (still
-     *  composited through the current blend mode). */
+    /** Brand presets: map of bare-lowercase word → { color, bold }.
+     *  Persisted to localStorage so presets survive reloads. Layout
+     *  applies the colour per-word (still composited through the blend
+     *  mode) and forces weight 900 when `bold` is true. */
     brandColors:     {},
   };
+
+  // -------- Brand presets persistence ---------------------------------
+  const BRAND_STORAGE_KEY = 'typearrange.brandColors.v1';
+
+  function loadBrandPresets() {
+    try {
+      const raw = localStorage.getItem(BRAND_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      // Accept both the old shape (word → "#hex") and the new shape.
+      const normalized = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        const key = String(k).trim().toLowerCase();
+        if (!key) continue;
+        if (typeof v === 'string') {
+          normalized[key] = { color: v, bold: false };
+        } else if (v && typeof v === 'object') {
+          normalized[key] = {
+            color: typeof v.color === 'string' ? v.color : null,
+            bold:  !!v.bold,
+          };
+        }
+      }
+      settings.brandColors = normalized;
+    } catch (e) {
+      console.warn('brand presets: failed to load', e);
+    }
+  }
+
+  function saveBrandPresets() {
+    try {
+      localStorage.setItem(BRAND_STORAGE_KEY, JSON.stringify(settings.brandColors));
+    } catch (e) {
+      console.warn('brand presets: failed to save', e);
+    }
+  }
+
+  loadBrandPresets();
 
   let transcript = null;     // { words, duration, video_url, language }
   /** Caption groups (2-D list of {w, s, e}). Held in app state rather
@@ -270,7 +310,7 @@
   function renderBrandList() {
     brandListEl.innerHTML = '';
     const entries = Object.entries(settings.brandColors);
-    entries.forEach(([word, color]) => {
+    entries.forEach(([word, entry]) => {
       const row = document.createElement('div');
       row.className = 'brand-row';
 
@@ -283,7 +323,8 @@
         const next = wi.value.trim().toLowerCase();
         if (!next || next === word) return;
         delete settings.brandColors[word];
-        settings.brandColors[next] = color;
+        settings.brandColors[next] = entry;
+        saveBrandPresets();
         renderBrandList();
         rebuildCaptions();
       });
@@ -291,9 +332,23 @@
       const ci = document.createElement('input');
       ci.type = 'color';
       ci.className = 'brand-color';
-      ci.value = color;
+      ci.value = entry.color || '#ffffff';
       ci.addEventListener('input', () => {
-        settings.brandColors[word] = ci.value;
+        entry.color = ci.value;
+        saveBrandPresets();
+        rebuildCaptions();
+      });
+
+      const boldBtn = document.createElement('button');
+      boldBtn.className = 'brand-bold' + (entry.bold ? ' active' : '');
+      boldBtn.textContent = 'B';
+      boldBtn.setAttribute('aria-pressed', entry.bold ? 'true' : 'false');
+      boldBtn.setAttribute('aria-label', `toggle bold for ${word}`);
+      boldBtn.addEventListener('click', () => {
+        entry.bold = !entry.bold;
+        boldBtn.classList.toggle('active', entry.bold);
+        boldBtn.setAttribute('aria-pressed', entry.bold ? 'true' : 'false');
+        saveBrandPresets();
         rebuildCaptions();
       });
 
@@ -303,12 +358,14 @@
       del.setAttribute('aria-label', `remove ${word}`);
       del.addEventListener('click', () => {
         delete settings.brandColors[word];
+        saveBrandPresets();
         renderBrandList();
         rebuildCaptions();
       });
 
       row.appendChild(wi);
       row.appendChild(ci);
+      row.appendChild(boldBtn);
       row.appendChild(del);
       brandListEl.appendChild(row);
     });
@@ -317,8 +374,12 @@
   function addBrandColor() {
     const w = brandAddWordEl.value.trim().toLowerCase();
     if (!w) return;
-    settings.brandColors[w] = brandAddColorEl.value;
+    settings.brandColors[w] = {
+      color: brandAddColorEl.value,
+      bold: false,
+    };
     brandAddWordEl.value = '';
+    saveBrandPresets();
     renderBrandList();
     rebuildCaptions();
   }
@@ -381,6 +442,21 @@
   playBtn.addEventListener('click', () => {
     if (video.paused) video.play(); else video.pause();
   });
+
+  // Mute toggle. Autoplay requires the video to start muted; this lets
+  // the user actually hear the clip once it's loaded.
+  const muteBtn = document.getElementById('muteBtn');
+  function refreshMuteBtn() {
+    const muted = video.muted;
+    muteBtn.classList.toggle('is-muted', muted);
+    muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    muteBtn.title = muted ? 'unmute' : 'mute';
+  }
+  muteBtn.addEventListener('click', () => {
+    video.muted = !video.muted;
+    refreshMuteBtn();
+  });
+  video.addEventListener('volumechange', refreshMuteBtn);
 
   scrubber.addEventListener('click', e => {
     const rect = scrubber.getBoundingClientRect();

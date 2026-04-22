@@ -132,6 +132,10 @@ TA.renderer = (() => {
           const x  = wd.x * W;
           const y  = wd.yBaseline * H;
           const wPx = wd.widthFrac * W;
+          // Layout measures words in ink bounds; shift the fillText origin
+          // right by the first glyph's left-bearing so the drawn ink-left
+          // lands exactly at `x`.
+          const drawOriginX = x + (wd.inkLeftFrac || 0) * W;
 
           // Pivot at the word's visual center (for the stretch) and add
           // the animation offset (which is in normalized width/height).
@@ -145,14 +149,14 @@ TA.renderer = (() => {
           ctx.fillStyle = wd.color || '#ffffff';
 
           // Order: translate(pivot + offset) → scale → translate(-pivot) →
-          // fillText at (x, y). Result: pure translation by (tx, ty) plus
-          // a stretch around the pivot.
+          // fillText at (drawOriginX, y). Result: pure translation by
+          // (tx, ty) plus a stretch around the pivot.
           ctx.translate(cx + txPx, cy + tyPx);
           ctx.scale(scaleX, scaleY);
           ctx.translate(-cx, -cy);
 
           ctx.font = `${wd.italic ? 'italic ' : ''}${wd.weight} ${fontPx}px ${state.fontFamily}, "Helvetica Neue", sans-serif`;
-          ctx.fillText(wd.w, x, y);
+          ctx.fillText(wd.w, drawOriginX, y);
           ctx.restore();
 
           if (state.showBounds) {

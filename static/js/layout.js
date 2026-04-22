@@ -65,7 +65,18 @@ TA.layout = (() => {
   const _measureCanvas = document.createElement('canvas');
   const _mctx = _measureCanvas.getContext('2d');
 
-  /** Measure width + glyph ascent/descent, all in normalized fractions. */
+  /** Measure a word's ink bounds in normalized fractions.
+   *
+   *  We use actualBoundingBoxLeft/Right — the *ink* extent — rather than
+   *  `m.width` (the advance) so words hug their glyphs. Letters with
+   *  generous side-bearings (capital letters, italics, bold weights) no
+   *  longer leave dead air at the edges, and words with a lone descender
+   *  (g/y/j) don't push neighbours further apart than their ink demands.
+   *
+   *  The caller positions the word by its ink-left edge (`x` = ink-left).
+   *  At draw time the renderer adds `inkLeftFrac * W` to the fillText
+   *  origin so the first glyph's left bearing lines up with `x`.
+   */
   function measureGlyph(text, fontFamily, weight, italic, sizeNH, trackingEm, aspect) {
     const REF_H = 1000;
     const REF_W = REF_H * aspect;
@@ -73,15 +84,22 @@ TA.layout = (() => {
     _mctx.font = `${italic ? 'italic ' : ''}${weight} ${px}px ${fontFamily}`;
 
     const m = _mctx.measureText(text);
-    const trackingPx = trackingEm * px * Math.max(0, text.length - 1);
-    const widthFrac = (m.width + trackingPx) / REF_W;
+    // Some browsers can return tiny negatives; clamp to 0.
+    const inkLeft  = Math.max(0, m.actualBoundingBoxLeft  ?? 0);
+    const inkRight = Math.max(0, m.actualBoundingBoxRight ?? m.width);
+    const inkWidth = inkLeft + inkRight;
 
-    // actualBoundingBox* gives the ink-bounds of the rendered glyphs.
-    // Fall back to approximations if the browser somehow doesn't expose them.
+    // Letter-spacing is applied at draw time via ctx.letterSpacing, but
+    // measureText on our offscreen ctx doesn't know about it. Internal
+    // tracking adds len-1 gaps inside the word; first char's left bearing
+    // and last char's right bearing are unaffected.
+    const trackingPx = trackingEm * px * Math.max(0, text.length - 1);
+    const widthFrac = (inkWidth + trackingPx) / REF_W;
+
     const ascent  = (m.actualBoundingBoxAscent  ?? px * 0.78) / REF_H;
     const descent = (m.actualBoundingBoxDescent ?? px * 0.22) / REF_H;
 
-    return { widthFrac, ascent, descent };
+    return { widthFrac, ascent, descent, inkLeftFrac: inkLeft / REF_W };
   }
 
   // ------------------------------------------------------------------
@@ -108,16 +126,21 @@ TA.layout = (() => {
     const items = group.map(g => {
       const display = g.w.replace(/^[,]+/, '');
       const imp = U.importance(display);
-      const weight = U.weightFor(imp);
-      const italic = U.italicFor(imp);
-      const sizeNH = baseSize * U.sizeFactorFor(imp) * sizeScale;
-      const { widthFrac, ascent, descent } =
-        measureGlyph(display, fontFamily, weight, italic, sizeNH, tracking, aspect);
-      // Brand colors match the bare, lowercased word — so "Robinhood," and
-      // "robinhood" both hit the same entry in the map.
+      // Brand preset lookup — case-insensitive, punctuation-stripped, so
+      // "Robinhood," and "robinhood" both hit the same entry.
       const key = U.stripPunct(display).toLowerCase();
-      const color = (brandColors && key && brandColors[key]) || null;
-      return { w: display, s: g.s, e: g.e, imp, weight, italic, sizeNH, widthFrac, ascent, descent, color };
+      const brand = (brandColors && key) ? brandColors[key] : null;
+      const forceBold = !!(brand && brand.bold);
+      const weight = forceBold ? 900 : U.weightFor(imp);
+      const italic = forceBold ? false : U.italicFor(imp);
+      const sizeNH = baseSize * U.sizeFactorFor(imp) * sizeScale;
+      const { widthFrac, ascent, descent, inkLeftFrac } =
+        measureGlyph(display, fontFamily, weight, italic, sizeNH, tracking, aspect);
+      const color = brand?.color || null;
+      return {
+        w: display, s: g.s, e: g.e, imp, weight, italic, sizeNH,
+        widthFrac, ascent, descent, inkLeftFrac, color,
+      };
     });
 
     // 4b. Flow into rows. Account for the inter-word gap when deciding
@@ -149,39 +172,21 @@ TA.layout = (() => {
     }
     if (row.length) rows.push(row);
 
-    // 4c. Per-row metrics using *actual* ascent/descent.
-    //     With that we can use a very tight leading: the gap between the
-    //     descenders of row N and the ascenders of row N+1 is just a
-    //     small fraction of the em.
-    const LEADING_FRAC_OF_EM = 0.04;   // ~4% of the row's em as airspace
+    // 4c. Per-row metrics + x-positions.
+    //
+    //     We compute x positions UP FRONT (before vertical stacking) so
+    //     the clash pass in 4d can ask "do any of row N's ink columns
+    //     overlap any of row N+1's ink columns?" — if not, the rows can
+    //     tuck together far tighter than a generic ascent+descent gap
+    //     would allow.
+    const LEADING_FRAC_OF_EM = 0.04;
     const rowMetrics = rows.map(r => ({
       ascent:  Math.max(...r.map(w => w.ascent)),
       descent: Math.max(...r.map(w => w.descent)),
       emSize:  Math.max(...r.map(w => w.sizeNH)),
     }));
 
-    // Total height = sum of (ascent + descent) + leading between rows.
-    let totalH = 0;
-    rowMetrics.forEach((rm, i) => {
-      totalH += rm.ascent + rm.descent;
-      if (i < rowMetrics.length - 1) {
-        totalH += Math.max(rowMetrics[i].emSize, rowMetrics[i + 1].emSize) * LEADING_FRAC_OF_EM;
-      }
-    });
-
-    // Vertical bias kept small so words still look "centered" in the box.
-    const verticalBias = (rand() - 0.5) * 0.03 * safeH;
-
-    // Start baseline for row 0: top of the safe-area, plus first row's ascent.
-    const topY = safeCY - totalH / 2 + verticalBias;
-    let nextTop = topY;
-
-    // 4d. Place rows.
-    const laidOutRows = rows.map((r, rowIdx) => {
-      const rm = rowMetrics[rowIdx];
-      const baselineY = nextTop + rm.ascent;
-
-      // Row width now includes the cumulative word-gap between neighbours.
+    const rowPlacements = rows.map((r, rowIdx) => {
       const rowW = r.reduce(
         (sum, w, i) => sum + w.widthFrac + (i > 0 ? wordGapFrac(r[i - 1], w, aspect) : 0),
         0,
@@ -209,18 +214,73 @@ TA.layout = (() => {
       }
 
       let x = xStart;
-      const placed = r.map((it, i) => {
+      return r.map((it, i) => {
         if (i > 0) x += wordGapFrac(r[i - 1], it, aspect);
-        const pos = { x, baselineY, ascent: it.ascent, descent: it.descent, item: it };
+        const pos = { x, widthFrac: it.widthFrac, ascent: it.ascent, descent: it.descent, item: it };
         x += it.widthFrac;
         return pos;
       });
+    });
 
-      // Advance to next row: this row's descent + leading.
-      nextTop = baselineY + rm.descent;
-      if (rowIdx < rows.length - 1) {
-        nextTop += Math.max(rm.emSize, rowMetrics[rowIdx + 1].emSize) * LEADING_FRAC_OF_EM;
+    // 4d. Clash-based vertical stacking.
+    //
+    //     For each pair of adjacent rows we check horizontal ink-column
+    //     overlap between their words. Where there *is* overlap, we need
+    //     `prev.descent + next.ascent` of vertical separation. Where the
+    //     rows don't share any x-range, clash is 0 and the baselines can
+    //     sit extremely close — producing the tight collage feel.
+    function clashBetween(aWords, bWords) {
+      let required = 0;
+      for (const a of aWords) {
+        const aL = a.x;
+        const aR = a.x + a.widthFrac;
+        for (const b of bWords) {
+          const bL = b.x;
+          const bR = b.x + b.widthFrac;
+          if (Math.min(aR, bR) > Math.max(aL, bL)) {
+            const need = a.descent + b.ascent;
+            if (need > required) required = need;
+          }
+        }
       }
+      return required;
+    }
+
+    // baseline[0] anchored at 0; we shift the whole stack to centre it
+    // in the safe area at the end.
+    const baselines = new Array(rows.length);
+    baselines[0] = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const clash = clashBetween(rowPlacements[i - 1], rowPlacements[i]);
+      const leading = Math.max(rowMetrics[i - 1].emSize, rowMetrics[i].emSize) * LEADING_FRAC_OF_EM;
+      // If rows don't overlap at all (clash === 0) still keep a touch of
+      // airspace so baselines don't collide — scaled to em so it's
+      // visually consistent across font sizes.
+      const minGap = Math.max(rowMetrics[i - 1].emSize, rowMetrics[i].emSize) * 0.05;
+      baselines[i] = baselines[i - 1] + Math.max(clash + leading, minGap);
+    }
+
+    // Total visual height spans the top-of-ink of row 0 to bottom-of-ink
+    // of the last row.
+    const totalH = baselines[rows.length - 1]
+      + rowMetrics[rows.length - 1].descent
+      + rowMetrics[0].ascent;
+
+    // Vertical bias kept small so the group still reads as centred.
+    const verticalBias = (rand() - 0.5) * 0.03 * safeH;
+
+    const baselineShift = safeCY - totalH / 2 + rowMetrics[0].ascent + verticalBias;
+
+    const laidOutRows = rows.map((r, rowIdx) => {
+      const rm = rowMetrics[rowIdx];
+      const baselineY = baselines[rowIdx] + baselineShift;
+      const placed = rowPlacements[rowIdx].map(p => ({
+        x: p.x,
+        baselineY,
+        ascent: p.ascent,
+        descent: p.descent,
+        item: p.item,
+      }));
       return { rowIdx, baselineY, height: rm.ascent + rm.descent, words: placed };
     });
 
@@ -241,6 +301,7 @@ TA.layout = (() => {
         italic: p.item.italic,
         sizeNH: p.item.sizeNH,
         widthFrac: p.item.widthFrac,
+        inkLeftFrac: p.item.inkLeftFrac || 0,
         ascent:  p.ascent,
         descent: p.descent,
         s: p.item.s,
