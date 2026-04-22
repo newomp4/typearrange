@@ -27,7 +27,6 @@ TA.animation = (() => {
 
   /** Default animation tuning. */
   const POP_IN_DURATION    = 0.30;   // seconds total entrance→settle
-  const STAGGER_PER_WORD   = 0.045;  // seconds between words in a caption
 
   /** Offset peaks (fractions of video width / height). */
   const OFFSET_X_FRAC      = 0.09;
@@ -69,22 +68,26 @@ TA.animation = (() => {
   /**
    * Compute per-word transform at time `t`.
    *
-   * @param {object} word         word entry from layout
-   * @param {number} captionStart caption's global start time
-   * @param {number} wordIndex    index of this word within its caption
-   * @param {number} t            playback time (posterized)
-   * @param {number} strength     0..1 — dials smear amount (affects
-   *                              scale-based variants only)
-   * @param {number} dirSeed      hash int — picks variant + direction
-   * @param {boolean} boring      force the subtle 97→100% pop variant
-   *                              (no translation, no smear) regardless
-   *                              of dirSeed; used by "minimal animation"
-   *                              captions.
+   * @param {object} word     word entry from layout — must include `s`
+   *                          (Whisper's spoken-start timestamp). The
+   *                          word pops in *when it's actually spoken*,
+   *                          not on a synthetic stagger from the caption
+   *                          start, so "hey welcome to the show today"
+   *                          doesn't splat all six words on screen in
+   *                          the first 300 ms and then sit there.
+   * @param {number} t        playback time (posterized)
+   * @param {number} strength 0..1 — dials smear amount (affects
+   *                          scale-based variants only)
+   * @param {number} dirSeed  hash int — picks variant + direction
+   * @param {boolean} boring  force the subtle 97→100% pop variant
+   *                          (no translation, no smear) regardless of
+   *                          dirSeed; used by "minimal animation"
+   *                          captions.
    * @returns {{ alpha:number, tx:number, ty:number, scaleX:number, scaleY:number }}
    *   tx / ty are in *fractions of video width/height* respectively.
    */
-  function transformAt(word, captionStart, wordIndex, t, strength, dirSeed, boring = false) {
-    const popStart = captionStart + wordIndex * STAGGER_PER_WORD;
+  function transformAt(word, t, strength, dirSeed, boring = false) {
+    const popStart = word.s;
     const popEnd   = popStart + POP_IN_DURATION;
 
     if (t < popStart) {
@@ -147,13 +150,16 @@ TA.animation = (() => {
   }
 
   function captionActive(cap, t) {
-    const enterLead = 0.15;
+    // No enter-lead now that words pop in at their spoken time —
+    // showing a caption before the first word is spoken just means
+    // putting words on screen before they're said.
+    const enterLead = 0.0;
     const exitTail  = 0.05;
     return t >= cap.start - enterLead && t <= cap.end + exitTail;
   }
 
   function captionAlpha(cap, t) {
-    const fadeOut = 0.18;
+    const fadeOut = 0.12;
     if (t > cap.end) return U.clamp(1 - (t - cap.end) / fadeOut, 0, 1);
     return 1;
   }

@@ -296,6 +296,38 @@ button { font-family: inherit; }
   color: var(--fg-dim);
   margin-bottom: 10px;
 }
+.panel-title-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-dim);
+  margin-bottom: 10px;
+  transition: color .15s var(--ease);
+}
+.panel-title-toggle:hover { color: var(--fg); }
+.panel-title-toggle .chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform .15s var(--ease);
+}
+.collapsible[aria-expanded="false"] .panel-title-toggle {
+  margin-bottom: 0;
+}
+.collapsible[aria-expanded="false"] .chevron {
+  transform: rotate(-90deg);
+}
+.collapsible[aria-expanded="false"] .collapsible-body {
+  display: none;
+}
 .row {
   display: flex;
   justify-content: space-between;

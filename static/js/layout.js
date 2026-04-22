@@ -67,15 +67,19 @@ TA.layout = (() => {
 
   /** Measure a word's ink bounds in normalized fractions.
    *
-   *  We use actualBoundingBoxLeft/Right — the *ink* extent — rather than
-   *  `m.width` (the advance) so words hug their glyphs. Letters with
-   *  generous side-bearings (capital letters, italics, bold weights) no
-   *  longer leave dead air at the edges, and words with a lone descender
-   *  (g/y/j) don't push neighbours further apart than their ink demands.
+   *  Horizontally we use actualBoundingBoxLeft/Right (*signed*) so words
+   *  hug their glyphs: a font whose first glyph sits slightly *right*
+   *  of the alignment point reports a negative left-bearing, and
+   *  previously clamping that to 0 added phantom whitespace before the
+   *  word at layout x. Keep the sign and the draw origin shifts the
+   *  ink-left pixel exactly onto layout x.
    *
-   *  The caller positions the word by its ink-left edge (`x` = ink-left).
-   *  At draw time the renderer adds `inkLeftFrac * W` to the fillText
-   *  origin so the first glyph's left bearing lines up with `x`.
+   *  Vertically we use em-proportional ascent/descent (sizeNH × 0.78 /
+   *  0.22) rather than the per-glyph ink extent. A heavy-bold word's
+   *  ink is much taller than a thin word's even when their nominal em
+   *  is the same, which used to inflate row height around bolded words.
+   *  Em-based metrics keep row spacing consistent across weight/italic
+   *  mixes.
    */
   function measureGlyph(text, fontFamily, weight, italic, sizeNH, trackingEm, aspect) {
     const REF_H = 1000;
@@ -84,20 +88,15 @@ TA.layout = (() => {
     _mctx.font = `${italic ? 'italic ' : ''}${weight} ${px}px ${fontFamily}`;
 
     const m = _mctx.measureText(text);
-    // Some browsers can return tiny negatives; clamp to 0.
-    const inkLeft  = Math.max(0, m.actualBoundingBoxLeft  ?? 0);
-    const inkRight = Math.max(0, m.actualBoundingBoxRight ?? m.width);
+    const inkLeft  = m.actualBoundingBoxLeft  ?? 0;
+    const inkRight = m.actualBoundingBoxRight ?? m.width;
     const inkWidth = inkLeft + inkRight;
 
-    // Letter-spacing is applied at draw time via ctx.letterSpacing, but
-    // measureText on our offscreen ctx doesn't know about it. Internal
-    // tracking adds len-1 gaps inside the word; first char's left bearing
-    // and last char's right bearing are unaffected.
     const trackingPx = trackingEm * px * Math.max(0, text.length - 1);
     const widthFrac = (inkWidth + trackingPx) / REF_W;
 
-    const ascent  = (m.actualBoundingBoxAscent  ?? px * 0.78) / REF_H;
-    const descent = (m.actualBoundingBoxDescent ?? px * 0.22) / REF_H;
+    const ascent  = sizeNH * 0.78;
+    const descent = sizeNH * 0.22;
 
     return { widthFrac, ascent, descent, inkLeftFrac: inkLeft / REF_W };
   }
@@ -106,11 +105,13 @@ TA.layout = (() => {
   // 4. Lay out a single caption.
   // ------------------------------------------------------------------
 
-  /** Word gap as a fraction of the caption's baseSize em.
-   *  A normal printer's word-space is ~0.3em. We use ONE value per
-   *  caption (not per-pair-max) so every gap in a row is the same
-   *  distance — hero-scaled words used to inflate one gap while
-   *  leaving the others normal, which read as uneven spacing. */
+  /** Word gap as a fraction of the two neighbours' average em. A normal
+   *  printer's word-space is ~0.3em.  We used to take `max(a, b)` (which
+   *  inflated one gap in a row of mixed sizes) and then swung to a
+   *  single per-caption constant (which felt too-wide around small
+   *  words and too-tight around hero words). Averaging is the middle
+   *  path — gaps scale proportionally with the words they separate, so
+   *  the collage reads as evenly spaced regardless of weight mix. */
   function layoutCaption(group, opts, seedInt) {
     const {
       fontFamily, baseSize, tracking, maxRowWidthFrac, sizeScale, aspect,
@@ -119,8 +120,7 @@ TA.layout = (() => {
     const rand = U.mulberry32(seedInt);
     const preset = boring ? 'stack-center' : pickPreset(rand);
 
-    // Single consistent gap for this caption, in fractions of video width.
-    const wordGap = wordGapEm * baseSize / aspect;
+    const wordGap = (a, b) => wordGapEm * (a.sizeNH + b.sizeNH) * 0.5 / aspect;
 
     // 4a. Per-word typography + measurement.
     //
@@ -169,7 +169,7 @@ TA.layout = (() => {
 
     for (const it of items) {
       const isHero = it.sizeNH >= HERO_SIZE;
-      const gap = row.length ? wordGap : 0;
+      const gap = row.length ? wordGap(row[row.length - 1], it) : 0;
       const wouldOverflow = rowWidth + gap + it.widthFrac > maxRowWidthFrac;
 
       if (row.length && (isHero || wouldOverflow)) {
@@ -177,7 +177,7 @@ TA.layout = (() => {
         row = [];
         rowWidth = 0;
       }
-      const gapNow = row.length ? wordGap : 0;
+      const gapNow = row.length ? wordGap(row[row.length - 1], it) : 0;
       row.push(it);
       rowWidth += gapNow + it.widthFrac;
 
@@ -205,7 +205,7 @@ TA.layout = (() => {
 
     const rowPlacements = rows.map((r, rowIdx) => {
       const rowW = r.reduce(
-        (sum, w, i) => sum + w.widthFrac + (i > 0 ? wordGap : 0),
+        (sum, w, i) => sum + w.widthFrac + (i > 0 ? wordGap(r[i - 1], w) : 0),
         0,
       );
       let xStart;
@@ -232,7 +232,7 @@ TA.layout = (() => {
 
       let x = xStart;
       return r.map((it, i) => {
-        if (i > 0) x += wordGap;
+        if (i > 0) x += wordGap(r[i - 1], it);
         const pos = { x, widthFrac: it.widthFrac, ascent: it.ascent, descent: it.descent, item: it };
         x += it.widthFrac;
         return pos;
@@ -302,8 +302,17 @@ TA.layout = (() => {
     });
 
     // 4e. Timing + flat word list with direction seeds.
+    //
+    //     cap.end is the visibility cutoff, not the audio-end. When a
+    //     final word has a very short [s, e] (Whisper sometimes hands us
+    //     a 0.05 s trailing token), its pop-in would still be playing
+    //     after the fade had already started. Extend end to whichever
+    //     is later — the spoken end, or the last word's pop completion —
+    //     so animations finish on-screen.
+    const POP_IN_DURATION = 0.30;
     const start = items[0].s;
-    const end = items[items.length - 1].e;
+    const lastWord = items[items.length - 1];
+    const end = Math.max(lastWord.e, lastWord.s + POP_IN_DURATION);
 
     return {
       start,

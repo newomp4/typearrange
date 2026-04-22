@@ -146,18 +146,23 @@
         <button id="captionAppend" class="caption-append" type="button">+ add caption</button>
       </div>
 
-      <div class="panel-section">
-        <div class="panel-title">brand colors</div>
-        <div id="brandList" class="brand-list"></div>
-        <div class="brand-add-row">
-          <input type="text" id="brandAddWord" placeholder="word (e.g. robinhood)" class="brand-word" />
-          <input type="color" id="brandAddColor" value="#00ff41" class="brand-color" />
-          <button id="brandAdd" class="brand-add-btn" aria-label="add brand color">+</button>
-        </div>
-        <div class="brand-io">
-          <button id="brandExport" class="btn" type="button">export</button>
-          <button id="brandImport" class="btn" type="button">import</button>
-          <input type="file" id="brandImportInput" accept="application/json,.json" hidden />
+      <div class="panel-section collapsible" id="brandSection">
+        <button class="panel-title panel-title-toggle" type="button" id="brandToggle" aria-expanded="true" aria-controls="brandBody">
+          <span>brand colors</span>
+          <span class="chevron" aria-hidden="true">▾</span>
+        </button>
+        <div class="collapsible-body" id="brandBody">
+          <div id="brandList" class="brand-list"></div>
+          <div class="brand-add-row">
+            <input type="text" id="brandAddWord" placeholder="word (e.g. robinhood)" class="brand-word" />
+            <input type="color" id="brandAddColor" value="#00ff41" class="brand-color" />
+            <button id="brandAdd" class="brand-add-btn" aria-label="add brand color">+</button>
+          </div>
+          <div class="brand-io">
+            <button id="brandExport" class="btn" type="button">export</button>
+            <button id="brandImport" class="btn" type="button">import</button>
+            <input type="file" id="brandImportInput" accept="application/json,.json" hidden />
+          </div>
         </div>
       </div>
 

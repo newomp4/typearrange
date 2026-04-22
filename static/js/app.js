@@ -561,6 +561,31 @@
 
   renderBrandList();
 
+  // Collapsible brand panel — keeps the brand library out of the way
+  // once the user has built up a long list. Collapsed state is
+  // remembered across reloads.
+  const BRAND_COLLAPSED_KEY = 'typearrange.brandsCollapsed.v1';
+  const brandSection = document.getElementById('brandSection');
+  const brandToggle  = document.getElementById('brandToggle');
+
+  function setBrandCollapsed(collapsed) {
+    brandSection.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    brandToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    try { localStorage.setItem(BRAND_COLLAPSED_KEY, collapsed ? '1' : '0'); }
+    catch (_) { /* storage disabled — just don't persist */ }
+  }
+
+  try {
+    if (localStorage.getItem(BRAND_COLLAPSED_KEY) === '1') {
+      setBrandCollapsed(true);
+    }
+  } catch (_) {}
+
+  brandToggle.addEventListener('click', () => {
+    const isCollapsed = brandSection.getAttribute('aria-expanded') === 'false';
+    setBrandCollapsed(!isCollapsed);
+  });
+
   // =====================================================================
   // 2. Drop zone
   // =====================================================================
