@@ -45,27 +45,32 @@
   // -------- Brand presets persistence ---------------------------------
   const BRAND_STORAGE_KEY = 'typearrange.brandColors.v1';
 
+  /** Normalise a parsed brand-colour map into the { color, bold } shape.
+   *  Accepts the legacy shape (word → "#hex") too, so exports from older
+   *  versions still import cleanly. */
+  function normalizeBrandMap(parsed) {
+    const out = {};
+    if (!parsed || typeof parsed !== 'object') return out;
+    for (const [k, v] of Object.entries(parsed)) {
+      const key = String(k).trim().toLowerCase();
+      if (!key) continue;
+      if (typeof v === 'string') {
+        out[key] = { color: v, bold: false };
+      } else if (v && typeof v === 'object') {
+        out[key] = {
+          color: typeof v.color === 'string' ? v.color : null,
+          bold:  !!v.bold,
+        };
+      }
+    }
+    return out;
+  }
+
   function loadBrandPresets() {
     try {
       const raw = localStorage.getItem(BRAND_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return;
-      // Accept both the old shape (word → "#hex") and the new shape.
-      const normalized = {};
-      for (const [k, v] of Object.entries(parsed)) {
-        const key = String(k).trim().toLowerCase();
-        if (!key) continue;
-        if (typeof v === 'string') {
-          normalized[key] = { color: v, bold: false };
-        } else if (v && typeof v === 'object') {
-          normalized[key] = {
-            color: typeof v.color === 'string' ? v.color : null,
-            bold:  !!v.bold,
-          };
-        }
-      }
-      settings.brandColors = normalized;
+      settings.brandColors = normalizeBrandMap(JSON.parse(raw));
     } catch (e) {
       console.warn('brand presets: failed to load', e);
     }
@@ -261,6 +266,12 @@
       // see when the caption will play before typing anything.
       const startSec = g[0]?.s ?? g._start ?? 0;
       time.textContent = U.fmtTime(startSec);
+      time.title = 'seek here';
+      time.addEventListener('click', () => {
+        if (!isFinite(video.duration)) return;
+        video.currentTime = Math.max(0, startSec);
+        if (video.paused) video.play().catch(() => {});
+      });
 
       const input = document.createElement('input');
       input.type = 'text';
@@ -377,6 +388,47 @@
     rebuildCaptions();
   }
 
+  /** "+ add caption" footer — appends at end of timeline, 0.5s after the
+   *  last caption or at 0 if none yet. */
+  document.getElementById('captionAppend').addEventListener('click', () => {
+    if (!groups) {
+      // No transcript yet — nothing to append onto.
+      return;
+    }
+    const last = groups[groups.length - 1];
+    const lastEnd = last?.length
+      ? last[last.length - 1].e
+      : (last?._end ?? 0);
+    const empty = [];
+    empty._start = lastEnd + 0.3;
+    empty._end   = lastEnd + 1.2;
+    empty.boring = false;
+    groups.push(empty);
+    renderCaptionList();
+    const rows = captionListEl.querySelectorAll('.cap-row');
+    rows[rows.length - 1]?.querySelector('.cap-text')?.focus();
+    rebuildCaptions();
+  });
+
+  /** Highlight the caption currently playing. Called from the render
+   *  loop; kept cheap (linear scan, early-out on the first match). */
+  let _lastActiveIdx = -2;
+  function updateActiveCaption() {
+    if (!groups || !groups.length) return;
+    const t = video.currentTime;
+    let active = -1;
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i];
+      const start = g.length ? g[0].s : (g._start ?? Infinity);
+      const end   = g.length ? g[g.length - 1].e : (g._end ?? -Infinity);
+      if (t >= start && t <= end) { active = i; break; }
+    }
+    if (active === _lastActiveIdx) return;
+    _lastActiveIdx = active;
+    const rows = captionListEl.querySelectorAll('.cap-row');
+    rows.forEach((r, i) => r.classList.toggle('cap-active', i === active));
+  }
+
   // =====================================================================
   // Brand colors (sidebar)
   // =====================================================================
@@ -465,6 +517,48 @@
   brandAddWordEl.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); addBrandColor(); }
   });
+
+  // Export / import the brand library so presets travel between
+  // browsers, videos, or teammates.
+  const brandExportBtn   = document.getElementById('brandExport');
+  const brandImportBtn   = document.getElementById('brandImport');
+  const brandImportInput = document.getElementById('brandImportInput');
+
+  brandExportBtn.addEventListener('click', () => {
+    const blob = new Blob(
+      [JSON.stringify(settings.brandColors, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'typearrange-brands.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  brandImportBtn.addEventListener('click', () => brandImportInput.click());
+  brandImportInput.addEventListener('change', async () => {
+    const f = brandImportInput.files?.[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      const incoming = normalizeBrandMap(JSON.parse(text));
+      // Merge rather than replace so the user doesn't lose presets they
+      // already have locally.
+      Object.assign(settings.brandColors, incoming);
+      saveBrandPresets();
+      renderBrandList();
+      rebuildCaptions();
+    } catch (e) {
+      console.error('brand import failed', e);
+      setStatus(`import failed: ${e.message}`);
+    }
+    brandImportInput.value = '';
+  });
+
   renderBrandList();
 
   // =====================================================================
@@ -499,6 +593,7 @@
     const tick = () => {
       if (renderer) renderer.draw(video.currentTime);
       updateTransport();
+      updateActiveCaption();
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);

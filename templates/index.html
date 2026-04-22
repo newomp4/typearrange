@@ -143,6 +143,7 @@
         <div id="captionList" class="caption-list">
           <div class="caption-empty">drop a video to edit captions</div>
         </div>
+        <button id="captionAppend" class="caption-append" type="button">+ add caption</button>
       </div>
 
       <div class="panel-section">
@@ -152,6 +153,11 @@
           <input type="text" id="brandAddWord" placeholder="word (e.g. robinhood)" class="brand-word" />
           <input type="color" id="brandAddColor" value="#00ff41" class="brand-color" />
           <button id="brandAdd" class="brand-add-btn" aria-label="add brand color">+</button>
+        </div>
+        <div class="brand-io">
+          <button id="brandExport" class="btn" type="button">export</button>
+          <button id="brandImport" class="btn" type="button">import</button>
+          <input type="file" id="brandImportInput" accept="application/json,.json" hidden />
         </div>
       </div>
 

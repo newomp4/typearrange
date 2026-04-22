@@ -123,17 +123,34 @@ TA.layout = (() => {
     const wordGap = wordGapEm * baseSize / aspect;
 
     // 4a. Per-word typography + measurement.
+    //
+    //     Boring mode intentionally bypasses the importance-driven weight
+    //     and size variation — the whole point of "minimal animation" is
+    //     a calm, uniform read-out, so every boring word gets the same
+    //     mid-weight roman at a single size. Brand-bold still wins over
+    //     boring (a flagged brand word should always be loud).
     const items = group.map(g => {
       const display = g.w.replace(/^[,]+/, '');
       const imp = U.importance(display);
-      // Brand preset lookup — case-insensitive, punctuation-stripped, so
-      // "Robinhood," and "robinhood" both hit the same entry.
       const key = U.stripPunct(display).toLowerCase();
       const brand = (brandColors && key) ? brandColors[key] : null;
       const forceBold = !!(brand && brand.bold);
-      const weight = forceBold ? 900 : U.weightFor(imp);
-      const italic = forceBold ? false : U.italicFor(imp);
-      const sizeNH = baseSize * U.sizeFactorFor(imp) * sizeScale;
+
+      let weight, italic, sizeNH;
+      if (forceBold) {
+        weight = 900;
+        italic = false;
+        sizeNH = baseSize * (boring ? 1.1 : U.sizeFactorFor(imp)) * sizeScale;
+      } else if (boring) {
+        weight = 700;
+        italic = false;
+        sizeNH = baseSize * 1.1 * sizeScale;
+      } else {
+        weight = U.weightFor(imp);
+        italic = U.italicFor(imp);
+        sizeNH = baseSize * U.sizeFactorFor(imp) * sizeScale;
+      }
+
       const { widthFrac, ascent, descent, inkLeftFrac } =
         measureGlyph(display, fontFamily, weight, italic, sizeNH, tracking, aspect);
       const color = brand?.color || null;

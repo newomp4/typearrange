@@ -176,9 +176,12 @@ button { font-family: inherit; }
   position: absolute;
   border: 1px dashed rgba(255,255,255,.55);
   pointer-events: auto;
+  cursor: grab;
   /* Dimensions set inline from JS */
 }
 .safe-area-box:hover { border-color: rgba(255,255,255,.9); }
+.safe-area-box.is-moving,
+.safe-area-box:active { cursor: grabbing; }
 
 .handle {
   position: absolute;
@@ -411,7 +414,11 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   font-size: 10px;
   min-width: 32px;
   text-align: right;
+  cursor: pointer;
+  user-select: none;
+  transition: color .1s var(--ease);
 }
+.cap-time:hover { color: var(--fg); }
 .cap-text {
   flex: 1;
   min-width: 0;
@@ -429,6 +436,32 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   border-color: var(--fg);
 }
 .cap-row.cap-active .cap-text { border-color: var(--fg); }
+.cap-row.cap-active .cap-time { color: var(--fg); }
+
+.caption-append {
+  margin-top: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--fg-dim);
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  border-radius: var(--radius);
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+.caption-append:hover {
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+.brand-io {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
 
 .cap-btn {
   height: 22px;
