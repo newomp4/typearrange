@@ -125,7 +125,7 @@ TA.renderer = (() => {
         for (let i = 0; i < cap.words.length; i++) {
           const wd = cap.words[i];
           const { alpha, tx, ty, scaleX, scaleY } =
-            A.transformAt(wd, cap.start, i, t, state.squash, wd.dirSeed || i);
+            A.transformAt(wd, cap.start, i, t, state.squash, wd.dirSeed || i, !!wd.boring);
           if (alpha <= 0) continue;
 
           const fontPx = wd.sizeNH * H;

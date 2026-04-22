@@ -106,21 +106,21 @@ TA.layout = (() => {
   // 4. Lay out a single caption.
   // ------------------------------------------------------------------
 
-  /** Visual air between adjacent words on a row, as a fraction of the
-   *  larger neighbour's em. A normal printer's word-space is ~0.3em; we
-   *  skew a little wider (0.33) so the collage doesn't run together when
-   *  bold and thin words sit beside each other. */
-  const WORD_GAP_EM = 0.33;
-  const wordGapFrac = (a, b, aspect) =>
-    WORD_GAP_EM * Math.max(a.sizeNH, b.sizeNH) / aspect;
-
+  /** Word gap as a fraction of the caption's baseSize em.
+   *  A normal printer's word-space is ~0.3em. We use ONE value per
+   *  caption (not per-pair-max) so every gap in a row is the same
+   *  distance — hero-scaled words used to inflate one gap while
+   *  leaving the others normal, which read as uneven spacing. */
   function layoutCaption(group, opts, seedInt) {
     const {
       fontFamily, baseSize, tracking, maxRowWidthFrac, sizeScale, aspect,
-      safeCX, safeCY, safeW, safeH, brandColors,
+      safeCX, safeCY, safeW, safeH, brandColors, wordGapEm, boring,
     } = opts;
     const rand = U.mulberry32(seedInt);
-    const preset = pickPreset(rand);
+    const preset = boring ? 'stack-center' : pickPreset(rand);
+
+    // Single consistent gap for this caption, in fractions of video width.
+    const wordGap = wordGapEm * baseSize / aspect;
 
     // 4a. Per-word typography + measurement.
     const items = group.map(g => {
@@ -152,7 +152,7 @@ TA.layout = (() => {
 
     for (const it of items) {
       const isHero = it.sizeNH >= HERO_SIZE;
-      const gap = row.length ? wordGapFrac(row[row.length - 1], it, aspect) : 0;
+      const gap = row.length ? wordGap : 0;
       const wouldOverflow = rowWidth + gap + it.widthFrac > maxRowWidthFrac;
 
       if (row.length && (isHero || wouldOverflow)) {
@@ -160,7 +160,7 @@ TA.layout = (() => {
         row = [];
         rowWidth = 0;
       }
-      const gapNow = row.length ? wordGapFrac(row[row.length - 1], it, aspect) : 0;
+      const gapNow = row.length ? wordGap : 0;
       row.push(it);
       rowWidth += gapNow + it.widthFrac;
 
@@ -188,7 +188,7 @@ TA.layout = (() => {
 
     const rowPlacements = rows.map((r, rowIdx) => {
       const rowW = r.reduce(
-        (sum, w, i) => sum + w.widthFrac + (i > 0 ? wordGapFrac(r[i - 1], w, aspect) : 0),
+        (sum, w, i) => sum + w.widthFrac + (i > 0 ? wordGap : 0),
         0,
       );
       let xStart;
@@ -215,7 +215,7 @@ TA.layout = (() => {
 
       let x = xStart;
       return r.map((it, i) => {
-        if (i > 0) x += wordGapFrac(r[i - 1], it, aspect);
+        if (i > 0) x += wordGap;
         const pos = { x, widthFrac: it.widthFrac, ascent: it.ascent, descent: it.descent, item: it };
         x += it.widthFrac;
         return pos;
@@ -293,6 +293,7 @@ TA.layout = (() => {
       end,
       preset,
       rows: laidOutRows,
+      boring: !!boring,
       words: laidOutRows.flatMap((r, ri) => r.words.map((p, wi) => ({
         x: p.x,
         yBaseline: p.baselineY,
@@ -307,6 +308,7 @@ TA.layout = (() => {
         s: p.item.s,
         e: p.item.e,
         color: p.item.color,
+        boring: !!boring,
         // Per-word direction seed: alternates by row, flipped per caption,
         // so within a caption words come from varied sides but it still
         // reads as intentional.
@@ -323,7 +325,15 @@ TA.layout = (() => {
 
   /** Lay out already-grouped captions. Split out from buildCaptions so
    *  the UI can hold its own mutable group list (for edited captions)
-   *  and call this whenever visual settings change. */
+   *  and call this whenever visual settings change.
+   *
+   *  Groups can carry:
+   *    - `.boring = true` — each word in the group is expanded into its
+   *      own 1-word caption (so only one word shows at a time), rendered
+   *      with a minimal subtle-pop animation. Used for calmer moments
+   *      that don't need the full motion-graphic smear.
+   *    - length 0 — empty/new caption placeholder, filtered out.
+   */
   function layoutCaptions(groups, settings) {
     if (!groups?.length) return [];
     const {
@@ -333,6 +343,7 @@ TA.layout = (() => {
       aspect       = 16 / 9,
       safeArea     = DEFAULT_SAFE_AREA,
       brandColors  = null,
+      wordGapEm    = 0.33,
     } = settings;
 
     const safeW  = Math.max(0.1, safeArea.x1 - safeArea.x0);
@@ -343,7 +354,22 @@ TA.layout = (() => {
     const baseSize = 0.09 * (safeH / 0.64);
     const maxRowWidthFrac = safeW * 0.98;
 
-    return groups.map((g, i) => layoutCaption(g, {
+    // Expand boring groups into 1-word sub-groups; drop empties.
+    const expanded = [];
+    for (const g of groups) {
+      if (!g || g.length === 0) continue;
+      if (g.boring) {
+        for (const w of g) {
+          const single = [w];
+          single.boring = true;
+          expanded.push(single);
+        }
+      } else {
+        expanded.push(g);
+      }
+    }
+
+    return expanded.map((g, i) => layoutCaption(g, {
       fontFamily,
       baseSize,
       tracking: trackingEm,
@@ -352,6 +378,8 @@ TA.layout = (() => {
       aspect,
       safeCX, safeCY, safeW, safeH,
       brandColors,
+      wordGapEm,
+      boring: !!g.boring,
     }, U.hash32(`${i}-${fontFamily}-${g[0]?.w || ''}`)));
   }
 

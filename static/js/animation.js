@@ -76,10 +76,14 @@ TA.animation = (() => {
    * @param {number} strength     0..1 — dials smear amount (affects
    *                              scale-based variants only)
    * @param {number} dirSeed      hash int — picks variant + direction
+   * @param {boolean} boring      force the subtle 97→100% pop variant
+   *                              (no translation, no smear) regardless
+   *                              of dirSeed; used by "minimal animation"
+   *                              captions.
    * @returns {{ alpha:number, tx:number, ty:number, scaleX:number, scaleY:number }}
    *   tx / ty are in *fractions of video width/height* respectively.
    */
-  function transformAt(word, captionStart, wordIndex, t, strength, dirSeed) {
+  function transformAt(word, captionStart, wordIndex, t, strength, dirSeed, boring = false) {
     const popStart = captionStart + wordIndex * STAGGER_PER_WORD;
     const popEnd   = popStart + POP_IN_DURATION;
 
@@ -90,13 +94,11 @@ TA.animation = (() => {
       return { alpha: 1, tx: 0, ty: 0, scaleX: 1, scaleY: 1 };
     }
 
-    // Raw progress 0..1 across the pop-in window.
     const uRaw = (t - popStart) / POP_IN_DURATION;
-    // easeOutCirc: fast start, hard brake at the end.
     const u = U.easing.outCirc(uRaw);
     const remain = 1 - u;
 
-    const variant = pickVariant(dirSeed);
+    const variant = boring ? 'pop-subtle' : pickVariant(dirSeed);
 
     let tx = 0, ty = 0, scaleX = 1, scaleY = 1;
 
@@ -114,16 +116,23 @@ TA.animation = (() => {
         ty =  OFFSET_Y_FRAC * remain;
         break;
       case 'pop': {
-        // Subtle 95% → 100% scale, no translation. Strength still dials
-        // the intensity so the smear slider affects this variant too.
+        // Subtle 95% → 100% scale, no translation. Strength dials
+        // intensity so the smear slider affects this variant too.
         const s = U.lerp(1, 0.95, remain * strength);
         scaleX = s;
         scaleY = s;
         break;
       }
+      case 'pop-subtle': {
+        // Minimal 97% → 100% pop. Intentionally ignores `strength` —
+        // boring mode is the "calm" setting, so it should stay calm
+        // even when the user has the smear slider cranked.
+        const s = U.lerp(0.97, 1, u);
+        scaleX = s;
+        scaleY = s;
+        break;
+      }
       case 'smear-x': {
-        // Classic x-stretch smear: enters from a side, stretched wide and
-        // thinned vertically, brakes into place.
         const dir = ((dirSeed >>> 1) & 1) ? 1 : -1;
         tx = -dir * OFFSET_X_FRAC * remain;
         scaleX = U.lerp(1, MAX_STRETCH, remain * strength);
@@ -132,7 +141,6 @@ TA.animation = (() => {
       }
     }
 
-    // Alpha: fade in quickly (full opacity by uRaw=0.3).
     const alpha = U.clamp(uRaw / 0.3, 0, 1);
 
     return { alpha, tx, ty, scaleX, scaleY };

@@ -30,6 +30,7 @@
     blendMode:       'difference',
     wordsPerCaption: 6,
     trackingEm:      -0.06,
+    wordGapEm:       0.33,
     posterizeFps:    12,
     squash:          0.6,
     sizeScale:       1.0,
@@ -222,6 +223,7 @@
     captions = L.layoutCaptions(groups, {
       fontFamily:      settings.fontFamily,
       trackingEm:      settings.trackingEm,
+      wordGapEm:       settings.wordGapEm,
       sizeScale:       settings.sizeScale,
       aspect,
       safeArea:        settings.safeArea,
@@ -255,47 +257,123 @@
 
       const time = document.createElement('span');
       time.className = 'cap-time';
-      time.textContent = U.fmtTime(g[0]?.s ?? 0);
+      // Empty (newly-inserted) rows fall back to _start so the user can
+      // see when the caption will play before typing anything.
+      const startSec = g[0]?.s ?? g._start ?? 0;
+      time.textContent = U.fmtTime(startSec);
 
       const input = document.createElement('input');
       input.type = 'text';
       input.className = 'cap-text';
       input.value = g.map(w => w.w).join(' ');
+      input.placeholder = g.length ? '' : 'new caption…';
       input.spellcheck = false;
       const commit = () => {
-        if (input.value !== g.map(w => w.w).join(' ')) {
-          updateCaptionText(i, input.value);
-        }
+        const current = g.map(w => w.w).join(' ');
+        if (input.value !== current) updateCaptionText(i, input.value);
       };
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
       });
 
+      // "min" — toggle boring mode on this caption.
+      const minBtn = document.createElement('button');
+      minBtn.className = 'cap-btn cap-min' + (g.boring ? ' active' : '');
+      minBtn.textContent = 'min';
+      minBtn.title = 'minimal animation (1 word at a time)';
+      minBtn.setAttribute('aria-pressed', g.boring ? 'true' : 'false');
+      minBtn.addEventListener('click', () => {
+        g.boring = !g.boring;
+        minBtn.classList.toggle('active', !!g.boring);
+        minBtn.setAttribute('aria-pressed', g.boring ? 'true' : 'false');
+        rebuildCaptions();
+      });
+
+      // "+" — insert a new empty caption after this one.
+      const addBtn = document.createElement('button');
+      addBtn.className = 'cap-btn cap-add';
+      addBtn.textContent = '+';
+      addBtn.title = 'insert caption after';
+      addBtn.addEventListener('click', () => insertCaptionAfter(i));
+
+      // "×" — delete this caption.
+      const delBtn = document.createElement('button');
+      delBtn.className = 'cap-btn cap-del';
+      delBtn.textContent = '×';
+      delBtn.title = 'delete caption';
+      delBtn.addEventListener('click', () => deleteCaption(i));
+
       row.appendChild(time);
       row.appendChild(input);
+      row.appendChild(minBtn);
+      row.appendChild(addBtn);
+      row.appendChild(delBtn);
       captionListEl.appendChild(row);
     });
   }
 
+  /** Derive [start, end] for a group — uses words if present, else the
+   *  sentinel _start/_end set at insert-time. */
+  function groupSpan(g) {
+    if (g.length) {
+      return { start: g[0].s, end: g[g.length - 1].e };
+    }
+    return { start: g._start ?? 0, end: g._end ?? (g._start ?? 0) + 0.5 };
+  }
+
   function updateCaptionText(idx, text) {
     const original = groups[idx];
-    if (!original?.length) return;
-    const start = original[0].s;
-    const end   = original[original.length - 1].e;
-    const span  = Math.max(0.1, end - start);
+    if (!original) return;
+    const { start, end } = groupSpan(original);
+    const span = Math.max(0.1, end - start);
     const wordList = text.trim().split(/\s+/).filter(Boolean);
     if (!wordList.length) {
-      // Refuse empty — just restore the list UI to the existing group.
+      // Empty input on a non-empty group — ignore (restore visible state).
+      // Empty input on an already-empty group — leave the row alone so
+      // the user can still type into it later.
       renderCaptionList();
       return;
     }
     const perWord = span / wordList.length;
-    groups[idx] = wordList.map((w, i) => ({
+    const next = wordList.map((w, i) => ({
       w,
       s: start + i * perWord,
       e: start + (i + 1) * perWord,
     }));
+    // Preserve per-group metadata (boring flag, etc.).
+    next.boring = !!original.boring;
+    groups[idx] = next;
+    rebuildCaptions();
+  }
+
+  function insertCaptionAfter(idx) {
+    if (!groups) return;
+    const current = groups[idx];
+    const next    = groups[idx + 1];
+    const currentEnd = current?.length ? current[current.length - 1].e : (current?._end ?? 0);
+    const nextStart  = next?.length    ? next[0].s                     : (next?._start    ?? currentEnd + 1.5);
+    const gap = Math.max(0.2, nextStart - currentEnd);
+    // Slot the new caption into the middle 40% of the gap so it doesn't
+    // butt right against its neighbours.
+    const newStart = currentEnd + gap * 0.30;
+    const newEnd   = currentEnd + gap * 0.70;
+    const empty = [];
+    empty._start = newStart;
+    empty._end   = newEnd;
+    empty.boring = false;
+    groups.splice(idx + 1, 0, empty);
+    renderCaptionList();
+    // Focus the new row's input so the user can start typing immediately.
+    const rows = captionListEl.querySelectorAll('.cap-row');
+    rows[idx + 1]?.querySelector('.cap-text')?.focus();
+    rebuildCaptions();
+  }
+
+  function deleteCaption(idx) {
+    if (!groups || !groups[idx]) return;
+    groups.splice(idx, 1);
+    renderCaptionList();
     rebuildCaptions();
   }
 
@@ -517,6 +595,11 @@
   wireRange('trackRange', 'trackVal', v => `${(v/1000).toFixed(3)}em`, v => {
     settings.trackingEm = v / 1000;
     applySettingsToRenderer();
+    rebuildCaptions();
+  });
+
+  wireRange('wordGapRange', 'wordGapVal', v => `${(v/100).toFixed(2)}em`, v => {
+    settings.wordGapEm = v / 100;
     rebuildCaptions();
   });
 

@@ -175,12 +175,29 @@ def transcribe():
             return jsonify(error=str(e)), 500
 
         # Run Whisper. word_timestamps=True gives us per-word start/end.
+        # Decode tuning below trades ~2× transcription time for
+        # noticeably fewer missed words / mistaken homophones — no
+        # change in model size on disk.
         model = get_model()
         segments, info = model.transcribe(
             str(wav_path),
             word_timestamps=True,
-            vad_filter=True,           # drop silence
-            beam_size=1,               # fast; quality is still excellent
+            vad_filter=True,
+            # Wider beam + best_of picks the best of multiple candidate
+            # decodings instead of committing to the first hypothesis.
+            beam_size=5,
+            best_of=5,
+            # Temperature fallbacks: if the model can't find a confident
+            # decode at t=0 it retries with a bit of sampling. Reduces
+            # "stuck on a hallucinated word" failures on quiet audio.
+            temperature=[0.0, 0.2, 0.4, 0.6],
+            # Don't feed the previous segment's text back in — stops
+            # early mistakes from cascading through the rest of the clip
+            # (common on short-form social audio with music).
+            condition_on_previous_text=False,
+            # Slightly more permissive VAD so the model doesn't clip
+            # the first/last word of a phrase.
+            vad_parameters={"min_silence_duration_ms": 250},
             language=None,             # auto-detect
         )
 

@@ -430,6 +430,29 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 }
 .cap-row.cap-active .cap-text { border-color: var(--fg); }
 
+.cap-btn {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 5px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.cap-btn:hover { border-color: var(--fg); color: var(--fg); }
+.cap-min.active {
+  background: var(--fg);
+  color: #000;
+  border-color: var(--fg);
+}
+.cap-add { font-size: 13px; line-height: 1; }
+.cap-del { font-size: 13px; line-height: 1; }
+
 /* Brand colors — word + color-picker rows. */
 .brand-list {
   display: flex;
