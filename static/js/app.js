@@ -341,6 +341,18 @@
     }
   }
 
+  /** Pixel-width of the "grab the edge" hotzones on each block. Near
+   *  either end, pointerdown starts a resize drag; anywhere else
+   *  starts a move drag (or, if the pointer doesn't move, stays a click). */
+  const BLOCK_EDGE_ZONE_PX = 8;
+
+  /** Minimum duration of a caption after resize so the user can't
+   *  collapse a block to zero width by mistake. */
+  const MIN_CAPTION_DURATION = 0.15;
+
+  /** Smallest neighbour gap the drag respects, in seconds. */
+  const NEIGHBOUR_GAP = 0.05;
+
   function renderTimelineBlocks() {
     timelineTrackEl.innerHTML = '';
     const dur = video.duration;
@@ -366,15 +378,159 @@
       block.style.left  = `${leftPct}%`;
       block.style.width = `${widthPct}%`;
       block.textContent = g.length ? g.map(w => w.w).join(' ') : '+ new caption';
-      block.title = `${U.fmtTime(span.start)} — ${block.textContent}`;
-      block.addEventListener('click', (e) => {
-        // Stop propagation so the timeline's own click handler doesn't
-        // scrub to the cursor x (which differs from the block's start).
-        e.stopPropagation();
-        selectCaption(i, { seek: true, play: false });
+      block.title = `${U.fmtTime(span.start)}–${U.fmtTime(span.end)}  ${g.length ? '' : '(empty — click to fill)'}\nclick to edit · drag to move · drag edges to resize`;
+
+      // Cursor hint — ew-resize near the edges, default elsewhere.
+      block.addEventListener('mousemove', ev => {
+        const rect = block.getBoundingClientRect();
+        const fromLeft  = ev.clientX - rect.left;
+        const fromRight = rect.right - ev.clientX;
+        block.style.cursor =
+          (fromLeft < BLOCK_EDGE_ZONE_PX || fromRight < BLOCK_EDGE_ZONE_PX)
+            ? 'ew-resize' : 'pointer';
       });
+
+      attachBlockDrag(block, i);
       timelineTrackEl.appendChild(block);
     });
+  }
+
+  /** Wire a block so pointerdown either drags (move / resize-start /
+   *  resize-end) or — if the pointer never moves past a threshold —
+   *  selects the caption. Using pointer events means mouse + touch +
+   *  pen all work. */
+  function attachBlockDrag(block, idx) {
+    block.addEventListener('pointerdown', downEvent => {
+      const g = groups?.[idx];
+      const dur = video.duration;
+      if (!g || !isFinite(dur) || dur <= 0) return;
+
+      // Figure out which drag mode based on where the pointer went down.
+      const rect = block.getBoundingClientRect();
+      const fromLeft  = downEvent.clientX - rect.left;
+      const fromRight = rect.right - downEvent.clientX;
+      let mode;
+      if (fromLeft  < BLOCK_EDGE_ZONE_PX)      mode = 'resize-start';
+      else if (fromRight < BLOCK_EDGE_ZONE_PX) mode = 'resize-end';
+      else                                     mode = 'move';
+
+      const timelineRect = timelineEl.getBoundingClientRect();
+      const origSpan = groupSpan(g);
+      const origWords = g.length ? g.map(w => ({ s: w.s, e: w.e })) : null;
+      const origMeta = { start: g._start, end: g._end };
+      const startX = downEvent.clientX;
+      let dragged = false;
+
+      downEvent.preventDefault();
+      downEvent.stopPropagation();
+
+      function applyDrag(dt) {
+        applyBlockTimingChange(idx, mode, dt, origSpan, origWords, origMeta, dur);
+        renderTimelineBlocks();
+        if (idx === selectedIdx) renderInspector();
+        // Keep the layouter in sync while dragging so playback reflects
+        // the new timing in real time.
+        rebuildCaptions();
+      }
+
+      function onMove(ev) {
+        const dx = ev.clientX - startX;
+        if (!dragged && Math.abs(dx) > 3) dragged = true;
+        if (!dragged) return;
+        const dt = (dx / timelineRect.width) * dur;
+        applyDrag(dt);
+      }
+
+      function onUp() {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        if (!dragged) {
+          // Treat as a click — select + seek.
+          selectCaption(idx, { seek: true, play: false });
+        }
+      }
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  /** Apply a drag delta to a caption's per-word timings.
+   *  - 'move'          shifts every word by the same dt.
+   *  - 'resize-start'  anchors the caption's end, scales the left side.
+   *  - 'resize-end'    anchors the caption's start, scales the right.
+   *  Neighbours are respected — a caption can't be dragged past the
+   *  previous caption's end or the next caption's start (minus a small
+   *  gap so they don't collide). */
+  function applyBlockTimingChange(idx, mode, dt, origSpan, origWords, origMeta, dur) {
+    const g = groups[idx];
+    if (!g) return;
+    const prev = groups[idx - 1];
+    const next = groups[idx + 1];
+    const prevEnd   = prev
+      ? (prev.length ? prev[prev.length - 1].e : (prev._end ?? 0))
+      : 0;
+    const nextStart = next
+      ? (next.length ? next[0].s : (next._start ?? dur))
+      : dur;
+
+    const os = origSpan.start;
+    const oe = origSpan.end;
+    const oldSpan = Math.max(0.0001, oe - os);
+
+    if (mode === 'move') {
+      const minStart = prevEnd + NEIGHBOUR_GAP;
+      const maxEnd   = nextStart - NEIGHBOUR_GAP;
+      // Clamp dt so the caption can't be pushed past either neighbour.
+      let dtClamped = dt;
+      dtClamped = Math.max(dtClamped, minStart - os);
+      dtClamped = Math.min(dtClamped, maxEnd - oe);
+
+      if (origWords) {
+        for (let i = 0; i < g.length; i++) {
+          g[i].s = origWords[i].s + dtClamped;
+          g[i].e = origWords[i].e + dtClamped;
+        }
+      }
+      g._start = (origMeta.start ?? os) + dtClamped;
+      g._end   = (origMeta.end   ?? oe) + dtClamped;
+      return;
+    }
+
+    if (mode === 'resize-start') {
+      const minStart = prevEnd + NEIGHBOUR_GAP;
+      const maxStart = oe - MIN_CAPTION_DURATION;
+      const newStart = U.clamp(os + dt, minStart, maxStart);
+      const newSpan  = oe - newStart;
+      if (origWords) {
+        for (let i = 0; i < g.length; i++) {
+          const relS = (origWords[i].s - os) / oldSpan;
+          const relE = (origWords[i].e - os) / oldSpan;
+          g[i].s = newStart + relS * newSpan;
+          g[i].e = newStart + relE * newSpan;
+        }
+      }
+      g._start = newStart;
+      g._end   = oe;
+      return;
+    }
+
+    if (mode === 'resize-end') {
+      const maxEnd = nextStart - NEIGHBOUR_GAP;
+      const minEnd = os + MIN_CAPTION_DURATION;
+      const newEnd = U.clamp(oe + dt, minEnd, maxEnd);
+      const newSpan = newEnd - os;
+      if (origWords) {
+        for (let i = 0; i < g.length; i++) {
+          const relS = (origWords[i].s - os) / oldSpan;
+          const relE = (origWords[i].e - os) / oldSpan;
+          g[i].s = os + relS * newSpan;
+          g[i].e = os + relE * newSpan;
+        }
+      }
+      g._start = os;
+      g._end   = newEnd;
+    }
   }
 
   function renderTimeline() {

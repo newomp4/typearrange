@@ -445,36 +445,52 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .btn-primary:disabled { background: #1a1a1a; color: var(--fg-dimmer); border-color: var(--line-strong); }
 
 /* -- Dock (bottom) ---------------------------------------------------
- *   Two rows: a compact transport/timeline strip on top, and a roomy
- *   inspector below for editing the selected caption.
- *   All caption editing lives here now; the side panel is settings only.
+ *   Three rows:
+ *     1. transport  — fixed 44 px
+ *     2. timeline   — fills 1fr (the whole dock when nothing is
+ *                     selected, since the inspector is hidden)
+ *     3. inspector  — auto height, hidden via [hidden] when nothing is
+ *                     selected so the timeline gets the real estate
+ *
+ *   Preset palette — each preset has a dedicated accent colour so a
+ *   glance at the timeline tells you which caption uses which style.
+ *   Motion = cool blue, minimal = white, typewriter = amber dashed,
+ *   split = warm orange. Same colours are used on the inspector's
+ *   preset-cycle button and on the block badge.
  */
+:root {
+  --preset-motion:      #3a6db5;
+  --preset-motion-fg:   #eaf1ff;
+  --preset-minimal:     #e6e6e6;
+  --preset-minimal-fg:  #0a0a0a;
+  --preset-typewriter:  #c88b2a;
+  --preset-typewriter-fg: #1a1208;
+  --preset-split:       #d96a2e;
+  --preset-split-fg:    #1d0c04;
+}
+
 .dock {
   background: #050505;
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-rows: 52px 1fr;
+  grid-template-rows: 44px 1fr auto;
   overflow: hidden;
   min-height: 0;
 }
-.dock-topbar {
+.dock-transport {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
 }
+.dock-spacer { flex: 1; }
 
-/* Timeline — horizontal stripe with a ruler row and a blocks row.
- * Blocks are positioned absolutely using percentage of video duration,
- * so scaling with window width is automatic. */
+/* Timeline fills the middle row of the dock. Blocks now get real
+ * height so captions are legible; ruler is a slim header on top. */
 .timeline {
-  flex: 1;
   position: relative;
-  height: 36px;
   background: #0a0a0a;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
   overflow: hidden;
   cursor: pointer;
   user-select: none;
@@ -483,13 +499,13 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .timeline-ruler {
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 14px;
+  height: 20px;
   border-bottom: 1px solid var(--line);
   pointer-events: none;
 }
 .ruler-tick {
   position: absolute;
-  top: 1px;
+  top: 3px;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   color: var(--fg-dim);
@@ -499,15 +515,15 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 .ruler-tick::before {
   content: '';
   position: absolute;
-  bottom: -14px;
+  bottom: -18px;
   left: 0;
   width: 1px;
-  height: 4px;
+  height: 6px;
   background: var(--line-strong);
 }
 .timeline-track {
   position: absolute;
-  top: 14px;
+  top: 20px;
   left: 0; right: 0; bottom: 0;
 }
 .timeline-empty {
@@ -523,39 +539,78 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 }
 .cap-block {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  background: var(--line-strong);
+  top: 8px;
+  bottom: 8px;
+  padding: 18px 10px 8px;
+  background: #1a1a1a;
   border: 1px solid #3a3a3a;
-  border-radius: 2px;
-  padding: 0 4px;
-  font-size: 10px;
+  border-radius: 3px;
+  font-size: 12px;
   color: var(--fg);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: background .12s var(--ease), color .12s var(--ease), border-color .12s var(--ease);
+  transition: background .12s var(--ease), color .12s var(--ease), border-color .12s var(--ease), box-shadow .12s var(--ease);
+  min-width: 18px;
 }
-.cap-block:hover { background: #2f2f2f; border-color: var(--fg-dim); }
-.cap-block[data-preset="motion"]     { background: #262626; }
-.cap-block[data-preset="minimal"]    { background: #3a3a3a; border-color: var(--fg-dim); }
-.cap-block[data-preset="typewriter"] { background: transparent; border-color: var(--fg-dim); border-style: dashed; }
-.cap-block[data-preset="split"]      { background: rgba(255, 180, 60, 0.25); border-color: rgba(255, 180, 60, 0.7); }
+.cap-block:hover { filter: brightness(1.18); }
+
+/* Preset badge — tiny label pinned to the top-left of the block so the
+ * caption's animation style reads without hovering. */
+.cap-block::before {
+  content: attr(data-preset);
+  position: absolute;
+  top: 3px;
+  left: 8px;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+/* Preset colour palette. */
+.cap-block[data-preset="motion"] {
+  background: var(--preset-motion);
+  color: var(--preset-motion-fg);
+  border-color: #5e8bce;
+}
+.cap-block[data-preset="minimal"] {
+  background: var(--preset-minimal);
+  color: var(--preset-minimal-fg);
+  border-color: #fff;
+}
+.cap-block[data-preset="typewriter"] {
+  background: var(--preset-typewriter);
+  color: var(--preset-typewriter-fg);
+  border-color: #e2a84a;
+  border-style: dashed;
+}
+.cap-block[data-preset="split"] {
+  background: var(--preset-split);
+  color: var(--preset-split-fg);
+  border-color: #eb8a50;
+}
 .cap-block.empty {
   background: transparent;
   border-style: dotted;
+  border-color: var(--line-strong);
   color: var(--fg-dim);
 }
+
+/* Selected — brighter frame ring + pulled forward. */
 .cap-block.selected,
 .cap-block.selected[data-preset] {
-  background: var(--fg);
-  color: #000;
-  border-color: var(--fg);
-  z-index: 2;
+  box-shadow: 0 0 0 2px var(--fg), 0 4px 16px rgba(0,0,0,.5);
+  z-index: 3;
+  filter: brightness(1.15);
 }
 .cap-block.cap-playing {
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.45);
+}
+.cap-block.cap-playing.selected {
+  box-shadow: 0 0 0 2px var(--fg), inset 0 0 0 1px rgba(255,255,255,.45);
 }
 
 .timeline-playhead {
@@ -592,32 +647,27 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 }
 .caption-append-dock:hover { color: var(--fg); border-color: var(--fg); }
 
-/* Inspector — selected-caption editor. Roomy because it has the full
-   width of the dock to work with. Horizontal-scrolls on narrow windows
-   so buttons don't squash the text input. */
+/* Inspector — compact strip shown only when a caption is selected.
+ * [hidden] natively collapses the row so the timeline takes its space. */
 .dock-inspector {
   display: flex;
   align-items: stretch;
-  gap: 14px;
-  padding: 14px 16px;
-  overflow: auto;
-}
-.inspector-empty {
-  color: var(--fg-dim);
-  font-size: 12px;
-  font-style: italic;
-  align-self: center;
+  gap: 12px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
 }
 .insp-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
   flex-shrink: 0;
+  min-width: 0;
 }
-.insp-field.grow { flex: 1; min-width: 280px; }
+.insp-field.grow { flex: 1; min-width: 220px; }
 .insp-label {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
@@ -626,27 +676,29 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   background: transparent;
   border: 1px solid var(--line-strong);
   color: var(--fg);
-  padding: 10px 12px;
-  font-size: 14px;
+  padding: 8px 10px;
+  font-size: 13px;
   font-family: inherit;
   border-radius: var(--radius);
+  min-width: 0;
 }
 .insp-text:focus { outline: none; border-color: var(--fg); }
 .insp-time {
   font-variant-numeric: tabular-nums;
   color: var(--fg);
-  font-size: 14px;
-  padding: 10px 12px;
+  font-size: 13px;
+  padding: 8px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   cursor: pointer;
   transition: border-color .15s var(--ease);
   display: inline-block;
   text-align: center;
+  min-width: 56px;
 }
 .insp-time:hover { border-color: var(--fg); }
 .insp-preset {
-  height: 40px;
+  height: 34px;
   min-width: 110px;
   padding: 0 14px;
   background: transparent;
@@ -659,14 +711,27 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   letter-spacing: 0.04em;
   transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
 }
-.insp-preset:hover { border-color: var(--fg); }
-.insp-preset[data-preset="motion"]     { color: var(--fg-dim); }
-.insp-preset[data-preset="minimal"]    { color: var(--fg); border-color: var(--fg); }
-.insp-preset[data-preset="typewriter"] { color: var(--fg); border-color: var(--fg-dim); border-style: dashed; }
+.insp-preset:hover { filter: brightness(1.15); }
+.insp-preset[data-preset="motion"] {
+  background: var(--preset-motion);
+  color: var(--preset-motion-fg);
+  border-color: #5e8bce;
+}
+.insp-preset[data-preset="minimal"] {
+  background: var(--preset-minimal);
+  color: var(--preset-minimal-fg);
+  border-color: #fff;
+}
+.insp-preset[data-preset="typewriter"] {
+  background: var(--preset-typewriter);
+  color: var(--preset-typewriter-fg);
+  border-color: #e2a84a;
+  border-style: dashed;
+}
 .insp-preset[data-preset="split"] {
-  color: #000;
-  background: var(--fg);
-  border-color: var(--fg);
+  background: var(--preset-split);
+  color: var(--preset-split-fg);
+  border-color: #eb8a50;
 }
 .insp-actions {
   display: flex;
@@ -674,8 +739,8 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   align-items: flex-end;
 }
 .insp-btn {
-  height: 40px;
-  min-width: 40px;
+  height: 34px;
+  min-width: 34px;
   padding: 0 10px;
   background: transparent;
   border: 1px solid var(--line-strong);

@@ -194,26 +194,25 @@
       </div>
     </aside>
 
-    <!-- Bottom dock: transport + timeline + inspector.
-         Replaces the old cramped caption list; gives the user a wide
-         time-scaled view of every caption and room to edit them. -->
+    <!-- Bottom dock: transport row + tall timeline + collapsible inspector.
+         The inspector row hides (hidden attribute) when nothing is
+         selected so the timeline absorbs its vertical space. -->
     <section class="dock" id="dock" aria-label="Timeline and caption editor">
-      <div class="dock-topbar">
+      <div class="dock-transport">
         <button id="playBtn" class="btn-icon" aria-label="Play/pause">▶</button>
         <button id="muteBtn" class="btn-icon btn-mute is-muted" aria-label="Mute/unmute" aria-pressed="true" title="unmute">♪</button>
         <span id="timeLabel" class="time">0:00 / 0:00</span>
-        <div class="timeline" id="timeline">
-          <div class="timeline-ruler" id="timelineRuler"></div>
-          <div class="timeline-track" id="timelineTrack">
-            <div class="timeline-empty">drop a video to see the timeline</div>
-          </div>
-          <div class="timeline-playhead" id="timelinePlayhead" hidden></div>
-        </div>
+        <div class="dock-spacer"></div>
         <button id="captionAppend" class="caption-append-dock" type="button">+ caption</button>
       </div>
-      <div class="dock-inspector" id="dockInspector">
-        <div class="inspector-empty">click a caption on the timeline to edit</div>
+      <div class="timeline" id="timeline">
+        <div class="timeline-ruler" id="timelineRuler"></div>
+        <div class="timeline-track" id="timelineTrack">
+          <div class="timeline-empty">drop a video to see the timeline</div>
+        </div>
+        <div class="timeline-playhead" id="timelinePlayhead" hidden></div>
       </div>
+      <div class="dock-inspector" id="dockInspector" hidden></div>
     </section>
   </main>
 
