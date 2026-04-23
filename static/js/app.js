@@ -18,11 +18,17 @@
   const canvas      = $('#canvas');
   const status      = $('#status');
   const playBtn     = $('#playBtn');
-  const scrubber    = $('#scrubber');
-  const scrubberFill = $('#scrubberFill');
   const timeLabel   = $('#timeLabel');
   const exportBtn   = $('#exportBtn');
   const resetBtn    = $('#resetBtn');
+
+  // New bottom-dock elements — timeline + inspector replace the old
+  // cramped sidebar caption list.
+  const timelineEl         = $('#timeline');
+  const timelineRulerEl    = $('#timelineRuler');
+  const timelineTrackEl    = $('#timelineTrack');
+  const timelinePlayheadEl = $('#timelinePlayhead');
+  const dockInspectorEl    = $('#dockInspector');
 
   // -------- Global settings --------------------------------------------
   const settings = {
@@ -256,11 +262,15 @@
   function rebuildGroups() {
     if (!transcript) return;
     groups = L.groupWords(transcript.words, settings.wordsPerCaption);
-    renderCaptionList();
+    selectedIdx = -1;
+    renderTimeline();
+    renderInspector();
     updateSplitGapUI();
   }
 
-  /** Re-lay out the held groups with current visual settings. */
+  /** Re-lay out the held groups with current visual settings.
+   *  Also refreshes the timeline blocks — preset colour-coding, block
+   *  text, and selection state all track the live groups array. */
   function rebuildCaptions() {
     if (!groups) return;
     const aspect = (video.videoWidth && video.videoHeight)
@@ -279,113 +289,24 @@
       alignment:       settings.alignment,
     });
     if (renderer) renderer.state.captions = captions;
+    renderTimelineBlocks();
   }
 
   // =====================================================================
-  // Caption editor (sidebar)
-  //   Each Whisper-grouped caption becomes one editable row. Editing the
-  //   text preserves the caption's original [start, end] span and
-  //   redistributes timing evenly across the new word list — so the
-  //   user can fix transcription mistakes without the audio drifting.
+  // Timeline + inspector — new bottom-dock caption editor.
+  //
+  //   Each caption renders as a block on a horizontal timeline scaled to
+  //   video.duration. Clicking a block selects it (seeks the playhead)
+  //   and populates the inspector below with a roomy editor. The
+  //   inspector is a function of `selectedIdx` and the live `groups`
+  //   array — whenever groups or selection changes we re-render it
+  //   from scratch, so we never have to reconcile stale node refs.
   // =====================================================================
-  const captionListEl = document.getElementById('captionList');
+  const CAPTION_PRESETS = ['motion', 'minimal', 'typewriter', 'split'];
 
-  function renderCaptionList() {
-    captionListEl.innerHTML = '';
-    if (!groups || !groups.length) {
-      const empty = document.createElement('div');
-      empty.className = 'caption-empty';
-      empty.textContent = 'drop a video to edit captions';
-      captionListEl.appendChild(empty);
-      return;
-    }
-    groups.forEach((g, i) => {
-      const row = document.createElement('div');
-      row.className = 'cap-row';
-      row.dataset.idx = i;
-
-      const time = document.createElement('span');
-      time.className = 'cap-time';
-      // Empty (newly-inserted) rows fall back to _start so the user can
-      // see when the caption will play before typing anything.
-      const startSec = g[0]?.s ?? g._start ?? 0;
-      time.textContent = U.fmtTime(startSec);
-      time.title = 'seek here';
-      time.addEventListener('click', () => {
-        if (!isFinite(video.duration)) return;
-        video.currentTime = Math.max(0, startSec);
-        if (video.paused) video.play().catch(() => {});
-      });
-
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'cap-text';
-      input.value = g.map(w => w.w).join(' ');
-      input.placeholder = g.length ? '' : 'new caption…';
-      input.spellcheck = false;
-      const commit = () => {
-        const current = g.map(w => w.w).join(' ');
-        if (input.value !== current) updateCaptionText(i, input.value);
-      };
-      input.addEventListener('blur', commit);
-      input.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-      });
-
-      // Preset cycle — each click moves to the next preset in the list.
-      // Labels are shown as-is in the button so the user sees the current
-      // style at a glance without needing a tooltip.
-      const CAPTION_PRESETS = ['motion', 'minimal', 'typewriter', 'split'];
-      // Resolve current preset: explicit .preset wins, .boring legacy
-      // alias maps to 'minimal'.
-      const currentPreset = () => g.preset || (g.boring ? 'minimal' : 'motion');
-      const presetBtn = document.createElement('button');
-      presetBtn.className = 'cap-btn cap-preset';
-      presetBtn.dataset.preset = currentPreset();
-      presetBtn.textContent = currentPreset();
-      presetBtn.title = 'caption style — click to cycle';
-      presetBtn.addEventListener('click', () => {
-        const idx = CAPTION_PRESETS.indexOf(currentPreset());
-        const next = CAPTION_PRESETS[(idx + 1) % CAPTION_PRESETS.length];
-        g.preset = next;
-        // Clear the legacy `boring` flag so it doesn't fight the preset.
-        delete g.boring;
-        presetBtn.dataset.preset = next;
-        presetBtn.textContent = next;
-        rebuildCaptions();
-        updateSplitGapUI();
-        // Auto-preview the new preset at this caption's start so the
-        // user sees the change immediately instead of scrubbing there
-        // themselves.
-        const seekTo = g.length ? g[0].s : (g._start ?? null);
-        if (seekTo != null && isFinite(video.duration)) {
-          video.currentTime = Math.max(0, seekTo - 0.1);
-          if (video.paused) video.play().catch(() => {});
-        }
-      });
-
-      // "+" — insert a new empty caption after this one.
-      const addBtn = document.createElement('button');
-      addBtn.className = 'cap-btn cap-add';
-      addBtn.textContent = '+';
-      addBtn.title = 'insert caption after';
-      addBtn.addEventListener('click', () => insertCaptionAfter(i));
-
-      // "×" — delete this caption.
-      const delBtn = document.createElement('button');
-      delBtn.className = 'cap-btn cap-del';
-      delBtn.textContent = '×';
-      delBtn.title = 'delete caption';
-      delBtn.addEventListener('click', () => deleteCaption(i));
-
-      row.appendChild(time);
-      row.appendChild(input);
-      row.appendChild(presetBtn);
-      row.appendChild(addBtn);
-      row.appendChild(delBtn);
-      captionListEl.appendChild(row);
-    });
-  }
+  /** Which caption is currently selected for editing in the inspector.
+   *  -1 means no selection — inspector shows the empty-state prompt. */
+  let selectedIdx = -1;
 
   /** Derive [start, end] for a group — uses words if present, else the
    *  sentinel _start/_end set at insert-time. */
@@ -396,6 +317,215 @@
     return { start: g._start ?? 0, end: g._end ?? (g._start ?? 0) + 0.5 };
   }
 
+  function groupPreset(g) {
+    return g.preset || (g.boring ? 'minimal' : 'motion');
+  }
+
+  function renderTimelineRuler() {
+    timelineRulerEl.innerHTML = '';
+    const dur = video.duration;
+    if (!isFinite(dur) || dur <= 0) return;
+    // Pick a tick step that gives ~6–12 labels across the duration.
+    let step;
+    if (dur <= 10)       step = 1;
+    else if (dur <= 30)  step = 5;
+    else if (dur <= 120) step = 10;
+    else if (dur <= 600) step = 30;
+    else                 step = 60;
+    for (let t = 0; t <= dur + 1e-3; t += step) {
+      const tick = document.createElement('span');
+      tick.className = 'ruler-tick';
+      tick.style.left = `${(t / dur) * 100}%`;
+      tick.textContent = U.fmtTime(t);
+      timelineRulerEl.appendChild(tick);
+    }
+  }
+
+  function renderTimelineBlocks() {
+    timelineTrackEl.innerHTML = '';
+    const dur = video.duration;
+    if (!isFinite(dur) || dur <= 0 || !groups?.length) {
+      const empty = document.createElement('div');
+      empty.className = 'timeline-empty';
+      empty.textContent = groups?.length
+        ? 'no duration yet'
+        : 'drop a video to see the timeline';
+      timelineTrackEl.appendChild(empty);
+      return;
+    }
+    groups.forEach((g, i) => {
+      const block = document.createElement('div');
+      block.className = 'cap-block';
+      block.dataset.preset = groupPreset(g);
+      if (!g.length) block.classList.add('empty');
+      if (i === selectedIdx) block.classList.add('selected');
+
+      const span = groupSpan(g);
+      const leftPct  = U.clamp(span.start / dur, 0, 1) * 100;
+      const widthPct = Math.max(0.4, U.clamp((span.end - span.start) / dur, 0, 1) * 100);
+      block.style.left  = `${leftPct}%`;
+      block.style.width = `${widthPct}%`;
+      block.textContent = g.length ? g.map(w => w.w).join(' ') : '+ new caption';
+      block.title = `${U.fmtTime(span.start)} — ${block.textContent}`;
+      block.addEventListener('click', (e) => {
+        // Stop propagation so the timeline's own click handler doesn't
+        // scrub to the cursor x (which differs from the block's start).
+        e.stopPropagation();
+        selectCaption(i, { seek: true, play: false });
+      });
+      timelineTrackEl.appendChild(block);
+    });
+  }
+
+  function renderTimeline() {
+    renderTimelineRuler();
+    renderTimelineBlocks();
+    // Re-evaluate which block is currently playing after a re-render.
+    _lastPlayingIdx = -2;
+    updatePlayingBlock();
+  }
+
+  function renderInspector() {
+    dockInspectorEl.innerHTML = '';
+    const g = groups && selectedIdx >= 0 ? groups[selectedIdx] : null;
+    if (!g) {
+      const empty = document.createElement('div');
+      empty.className = 'inspector-empty';
+      empty.textContent = groups?.length
+        ? 'click a caption on the timeline to edit'
+        : 'drop a video to edit captions';
+      dockInspectorEl.appendChild(empty);
+      return;
+    }
+    const span = groupSpan(g);
+
+    // Time — click to seek.
+    const timeField = document.createElement('div');
+    timeField.className = 'insp-field';
+    timeField.innerHTML = '<span class="insp-label">time</span>';
+    const timeVal = document.createElement('span');
+    timeVal.className = 'insp-time';
+    timeVal.textContent = U.fmtTime(span.start);
+    timeVal.title = 'seek here';
+    timeVal.addEventListener('click', () => {
+      if (!isFinite(video.duration)) return;
+      video.currentTime = Math.max(0, span.start);
+      if (video.paused) video.play().catch(() => {});
+    });
+    timeField.appendChild(timeVal);
+
+    // Text — big input that takes the remaining width.
+    const textField = document.createElement('div');
+    textField.className = 'insp-field grow';
+    textField.innerHTML = '<span class="insp-label">text</span>';
+    const textInput = document.createElement('input');
+    textInput.type = 'text';
+    textInput.className = 'insp-text';
+    textInput.value = g.map(w => w.w).join(' ');
+    textInput.placeholder = g.length ? '' : 'type caption words…';
+    textInput.spellcheck = false;
+    const commit = () => {
+      const current = (groups[selectedIdx] || []).map(w => w.w).join(' ');
+      if (textInput.value !== current) {
+        updateCaptionText(selectedIdx, textInput.value);
+      }
+    };
+    textInput.addEventListener('blur', commit);
+    textInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); textInput.blur(); }
+    });
+    textField.appendChild(textInput);
+
+    // Preset cycle — large button showing current preset by name.
+    const presetField = document.createElement('div');
+    presetField.className = 'insp-field';
+    presetField.innerHTML = '<span class="insp-label">style</span>';
+    const cur = groupPreset(g);
+    const presetBtn = document.createElement('button');
+    presetBtn.className = 'insp-preset';
+    presetBtn.dataset.preset = cur;
+    presetBtn.textContent = cur;
+    presetBtn.title = 'caption style — click to cycle';
+    presetBtn.addEventListener('click', () => {
+      const cg = groups[selectedIdx];
+      if (!cg) return;
+      const idx = CAPTION_PRESETS.indexOf(groupPreset(cg));
+      const next = CAPTION_PRESETS[(idx + 1) % CAPTION_PRESETS.length];
+      cg.preset = next;
+      delete cg.boring;   // legacy flag loses to explicit preset
+      rebuildCaptions();
+      renderTimeline();
+      renderInspector();
+      updateSplitGapUI();
+      // Auto-preview — seek to the caption's start and play.
+      const seekTo = cg.length ? cg[0].s : (cg._start ?? null);
+      if (seekTo != null && isFinite(video.duration)) {
+        video.currentTime = Math.max(0, seekTo - 0.1);
+        if (video.paused) video.play().catch(() => {});
+      }
+    });
+    presetField.appendChild(presetBtn);
+
+    // Actions — insert after, delete.
+    const actionsField = document.createElement('div');
+    actionsField.className = 'insp-field';
+    actionsField.innerHTML = '<span class="insp-label">actions</span>';
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'insp-actions';
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'insp-btn';
+    addBtn.textContent = '+';
+    addBtn.title = 'insert caption after';
+    addBtn.addEventListener('click', () => {
+      const newIdx = selectedIdx + 1;
+      insertCaptionAfter(selectedIdx);
+      selectCaption(newIdx, { seek: false, play: false, focusText: true });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'insp-btn danger';
+    delBtn.textContent = '×';
+    delBtn.title = 'delete caption';
+    delBtn.addEventListener('click', () => {
+      deleteCaption(selectedIdx);
+      selectedIdx = -1;
+      renderTimeline();
+      renderInspector();
+      updateSplitGapUI();
+    });
+
+    actionsRow.appendChild(addBtn);
+    actionsRow.appendChild(delBtn);
+    actionsField.appendChild(actionsRow);
+
+    dockInspectorEl.appendChild(timeField);
+    dockInspectorEl.appendChild(textField);
+    dockInspectorEl.appendChild(presetField);
+    dockInspectorEl.appendChild(actionsField);
+  }
+
+  /** Public selection helper — used by block clicks, insert/delete, and
+   *  keyboard shortcuts. */
+  function selectCaption(idx, { seek = true, play = false, focusText = false } = {}) {
+    if (!groups || idx < 0 || idx >= groups.length) {
+      selectedIdx = -1;
+    } else {
+      selectedIdx = idx;
+    }
+    const g = groups?.[selectedIdx];
+    if (g && seek && isFinite(video.duration)) {
+      const seekTo = g.length ? g[0].s : (g._start ?? 0);
+      video.currentTime = Math.max(0, seekTo);
+      if (play && video.paused) video.play().catch(() => {});
+    }
+    renderTimeline();
+    renderInspector();
+    if (focusText) {
+      dockInspectorEl.querySelector('.insp-text')?.focus();
+    }
+  }
+
   function updateCaptionText(idx, text) {
     const original = groups[idx];
     if (!original) return;
@@ -403,10 +533,11 @@
     const span = Math.max(0.1, end - start);
     const wordList = text.trim().split(/\s+/).filter(Boolean);
     if (!wordList.length) {
-      // Empty input on a non-empty group — ignore (restore visible state).
-      // Empty input on an already-empty group — leave the row alone so
-      // the user can still type into it later.
-      renderCaptionList();
+      // Empty input on a non-empty group — ignore. An empty input on an
+      // already-empty placeholder group leaves the slot alone so the
+      // user can type later.
+      renderTimeline();
+      renderInspector();
       return;
     }
     const perWord = span / wordList.length;
@@ -420,6 +551,8 @@
     if (original.preset) next.preset = original.preset;
     groups[idx] = next;
     rebuildCaptions();
+    renderTimeline();
+    renderInspector();
   }
 
   function insertCaptionAfter(idx) {
@@ -429,8 +562,6 @@
     const currentEnd = current?.length ? current[current.length - 1].e : (current?._end ?? 0);
     const nextStart  = next?.length    ? next[0].s                     : (next?._start    ?? currentEnd + 1.5);
     const gap = Math.max(0.2, nextStart - currentEnd);
-    // Slot the new caption into the middle 40% of the gap so it doesn't
-    // butt right against its neighbours.
     const newStart = currentEnd + gap * 0.30;
     const newEnd   = currentEnd + gap * 0.70;
     const empty = [];
@@ -438,27 +569,20 @@
     empty._end   = newEnd;
     empty.boring = false;
     groups.splice(idx + 1, 0, empty);
-    renderCaptionList();
-    // Focus the new row's input so the user can start typing immediately.
-    const rows = captionListEl.querySelectorAll('.cap-row');
-    rows[idx + 1]?.querySelector('.cap-text')?.focus();
     rebuildCaptions();
+    renderTimeline();
   }
 
   function deleteCaption(idx) {
     if (!groups || !groups[idx]) return;
     groups.splice(idx, 1);
-    renderCaptionList();
     rebuildCaptions();
   }
 
-  /** "+ add caption" footer — appends at end of timeline, 0.5s after the
-   *  last caption or at 0 if none yet. */
+  /** "+ caption" in the dock topbar — appends at the end of the
+   *  timeline and auto-selects the new slot so the user can type. */
   document.getElementById('captionAppend').addEventListener('click', () => {
-    if (!groups) {
-      // No transcript yet — nothing to append onto.
-      return;
-    }
+    if (!groups) return;
     const last = groups[groups.length - 1];
     const lastEnd = last?.length
       ? last[last.length - 1].e
@@ -468,29 +592,45 @@
     empty._end   = lastEnd + 1.2;
     empty.boring = false;
     groups.push(empty);
-    renderCaptionList();
-    const rows = captionListEl.querySelectorAll('.cap-row');
-    rows[rows.length - 1]?.querySelector('.cap-text')?.focus();
     rebuildCaptions();
+    selectCaption(groups.length - 1, { seek: false, play: false, focusText: true });
   });
 
-  /** Highlight the caption currently playing. Called from the render
-   *  loop; kept cheap (linear scan, early-out on the first match). */
-  let _lastActiveIdx = -2;
-  function updateActiveCaption() {
-    if (!groups || !groups.length) return;
+  // Timeline background click = scrub to that position. Blocks
+  // stopPropagation so this only fires on empty timeline area.
+  timelineEl.addEventListener('click', e => {
+    if (!isFinite(video.duration)) return;
+    const rect = timelineEl.getBoundingClientRect();
+    const u = U.clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    video.currentTime = u * video.duration;
+  });
+
+  /** Highlight the currently-playing block on the timeline.
+   *  Cheap linear scan, only mutates the DOM when the active index
+   *  actually changes. */
+  let _lastPlayingIdx = -2;
+  function updatePlayingBlock() {
+    if (!groups?.length) return;
     const t = video.currentTime;
     let active = -1;
     for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
-      const start = g.length ? g[0].s : (g._start ?? Infinity);
-      const end   = g.length ? g[g.length - 1].e : (g._end ?? -Infinity);
-      if (t >= start && t <= end) { active = i; break; }
+      const span = groupSpan(groups[i]);
+      if (t >= span.start && t <= span.end) { active = i; break; }
     }
-    if (active === _lastActiveIdx) return;
-    _lastActiveIdx = active;
-    const rows = captionListEl.querySelectorAll('.cap-row');
-    rows.forEach((r, i) => r.classList.toggle('cap-active', i === active));
+    if (active === _lastPlayingIdx) return;
+    _lastPlayingIdx = active;
+    const blocks = timelineTrackEl.querySelectorAll('.cap-block');
+    blocks.forEach((b, i) => b.classList.toggle('cap-playing', i === active));
+  }
+
+  function updateTimelinePlayhead() {
+    if (!isFinite(video.duration) || video.duration <= 0) {
+      timelinePlayheadEl.hidden = true;
+      return;
+    }
+    timelinePlayheadEl.hidden = false;
+    const pct = (video.currentTime / video.duration) * 100;
+    timelinePlayheadEl.style.left = `${pct}%`;
   }
 
   // =====================================================================
@@ -682,7 +822,8 @@
     const tick = () => {
       if (renderer) renderer.draw(video.currentTime);
       updateTransport();
-      updateActiveCaption();
+      updateTimelinePlayhead();
+      updatePlayingBlock();
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -691,9 +832,6 @@
   function updateTransport() {
     const dur = isFinite(video.duration) ? video.duration : 0;
     const cur = video.currentTime;
-    if (dur > 0) {
-      scrubberFill.style.width = `${(cur / dur) * 100}%`;
-    }
     timeLabel.textContent = `${U.fmtTime(cur)} / ${U.fmtTime(dur)}`;
     playBtn.textContent = video.paused ? '▶' : '❚❚';
   }
@@ -719,12 +857,6 @@
     refreshMuteBtn();
   });
   video.addEventListener('volumechange', refreshMuteBtn);
-
-  scrubber.addEventListener('click', e => {
-    const rect = scrubber.getBoundingClientRect();
-    const u = U.clamp((e.clientX - rect.left) / rect.width, 0, 1);
-    if (isFinite(video.duration)) video.currentTime = u * video.duration;
-  });
 
   // Keyboard shortcuts — all suppressed when focus is in an input /
   // button / textarea so we don't hijack typing or native button activation.
@@ -854,8 +986,10 @@
     transcript = null;
     groups = null;
     captions = [];
+    selectedIdx = -1;
     if (renderer) renderer.state.captions = [];
-    renderCaptionList();
+    renderTimeline();
+    renderInspector();
     updateSplitGapUI();
     preview.classList.add('hidden');
     dropzone.classList.remove('hidden');
