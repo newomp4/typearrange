@@ -362,7 +362,8 @@ TA.layout = (() => {
   //      resulting words / rows into a single caption output so the
   //      renderer treats it as one caption.
   // ------------------------------------------------------------------
-  const SPLIT_CENTER_GAP_FRAC = 0.20;  // fraction of safe width kept empty
+  /** Default object-gap box if the app hasn't given us one. */
+  const DEFAULT_SPLIT_GAP = { x0: 0.40, y0: 0.30, x1: 0.60, y1: 0.70 };
 
   function layoutSplitCaption(group, opts, seedInt) {
     // Split words by index midpoint. For 5 words → left: 2, right: 3.
@@ -371,18 +372,29 @@ TA.layout = (() => {
     const leftWords  = group.slice(0, midIdx);
     const rightWords = group.slice(midIdx);
 
-    const halfW = opts.safeW * (1 - SPLIT_CENTER_GAP_FRAC) / 2;
-    // Each sub-region's centre sits halfway between the outer safe-area
-    // edge and the central gap — i.e. the middle of its half.
-    const leftCX  = opts.safeCX - opts.safeW / 2 + halfW / 2;
-    const rightCX = opts.safeCX + opts.safeW / 2 - halfW / 2;
+    // Derive the two sub-regions from the draggable object-gap box.
+    // Left region = safeArea.x0 → gap.x0. Right region = gap.x1 →
+    // safeArea.x1. The sub-regions are vertically locked to the
+    // object-gap's own Y range so the text sits at the subject's eye
+    // line — drag the box up/down to raise or lower captions around it.
+    const gap    = opts.splitGap || DEFAULT_SPLIT_GAP;
+    const safeX0 = opts.safeCX - opts.safeW / 2;
+    const safeX1 = opts.safeCX + opts.safeW / 2;
+    const leftW  = Math.max(0.05, gap.x0 - safeX0);
+    const rightW = Math.max(0.05, safeX1 - gap.x1);
+    const leftCX  = safeX0 + leftW / 2;
+    const rightCX = safeX1 - rightW / 2;
+    const regionCY = (gap.y0 + gap.y1) / 2;
+    const regionH  = Math.max(0.1, gap.y1 - gap.y0);
 
-    const subOpts = (cx) => ({
+    const subOpts = (cx, w) => ({
       ...opts,
       safeCX: cx,
-      safeW: halfW,
+      safeCY: regionCY,
+      safeW: w,
+      safeH: regionH,
       // Narrow the allowed row width to stay inside the half.
-      maxRowWidthFrac: halfW * 0.98,
+      maxRowWidthFrac: w * 0.98,
       // The two halves themselves align to their own region's centre.
       alignment: 'center',
       // Don't recurse back into split or minimal — halves use motion.
@@ -390,8 +402,8 @@ TA.layout = (() => {
       boring: false,
     });
 
-    const leftOut  = leftWords.length  ? layoutCaption(leftWords,  subOpts(leftCX),  seedInt ^ 0x1) : null;
-    const rightOut = rightWords.length ? layoutCaption(rightWords, subOpts(rightCX), seedInt ^ 0x2) : null;
+    const leftOut  = leftWords.length  ? layoutCaption(leftWords,  subOpts(leftCX,  leftW),  seedInt ^ 0x1) : null;
+    const rightOut = rightWords.length ? layoutCaption(rightWords, subOpts(rightCX, rightW), seedInt ^ 0x2) : null;
 
     const parts = [leftOut, rightOut].filter(Boolean);
     // Fall back to a plain motion caption if both halves came out empty.
@@ -450,6 +462,7 @@ TA.layout = (() => {
       sizeScale    = 1.0,
       aspect       = 16 / 9,
       safeArea     = DEFAULT_SAFE_AREA,
+      splitGap     = null,
       brandColors  = null,
       wordGapEm    = 0.33,
       alignment    = 'center',
@@ -496,6 +509,7 @@ TA.layout = (() => {
         sizeScale,
         aspect,
         safeCX, safeCY, safeW, safeH,
+        splitGap,
         brandColors,
         wordGapEm,
         alignment,

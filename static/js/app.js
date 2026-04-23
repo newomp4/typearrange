@@ -40,6 +40,12 @@
     squash:          0.6,
     sizeScale:       1.0,
     safeArea:        { ...TA.layout.DEFAULT_SAFE_AREA },
+    /** Split-preset "object" gap — the rectangular region where a
+     *  central subject is framed in the video. The split layout places
+     *  the first half of each caption's words to the left of this box
+     *  and the rest to the right, letting the subject visually separate
+     *  the phrase. */
+    splitGap:        { x0: 0.40, y0: 0.30, x1: 0.60, y1: 0.70 },
     /** Brand presets: map of bare-lowercase word → { color, bold }.
      *  Persisted to localStorage so presets survive reloads. Layout
      *  applies the colour per-word (still composited through the blend
@@ -100,6 +106,7 @@
   let captions = [];
   let renderer = null;
   let safeAreaCtl = null;
+  let splitGapCtl = null;
 
   // =====================================================================
   // 1. Upload + transcription
@@ -197,6 +204,35 @@
     safeAreaCtl.set(settings.safeArea);
   }
 
+  /** Attach drag/snap behaviour to the split-preset "object" box. It's
+   *  hidden from the DOM until a caption flips to split; we still wire
+   *  it up lazily on first show so dragging works immediately. */
+  function initSplitGap() {
+    if (splitGapCtl) return;
+    const wrap = document.getElementById('canvasWrap');
+    const box  = document.getElementById('splitGapBox');
+    splitGapCtl = TA.safeArea.attach(wrap, box, (next) => {
+      settings.splitGap = next;
+      rebuildCaptions();
+    });
+    splitGapCtl.set(settings.splitGap);
+  }
+
+  /** Show/hide the split-gap overlay based on whether any caption is
+   *  using the split preset. Keeps the viewer uncluttered for videos
+   *  that aren't using it. */
+  function updateSplitGapUI() {
+    const el = document.getElementById('splitGap');
+    if (!el) return;
+    const anySplit = groups?.some(g => g?.preset === 'split');
+    if (anySplit) {
+      el.hidden = false;
+      initSplitGap();
+    } else {
+      el.hidden = true;
+    }
+  }
+
   function initRenderer() {
     if (renderer) return;
     renderer = R.create(canvas, video);
@@ -221,6 +257,7 @@
     if (!transcript) return;
     groups = L.groupWords(transcript.words, settings.wordsPerCaption);
     renderCaptionList();
+    updateSplitGapUI();
   }
 
   /** Re-lay out the held groups with current visual settings. */
@@ -237,6 +274,7 @@
       sizeScale:       settings.sizeScale,
       aspect,
       safeArea:        settings.safeArea,
+      splitGap:        settings.splitGap,
       brandColors:     settings.brandColors,
       alignment:       settings.alignment,
     });
@@ -315,6 +353,15 @@
         presetBtn.dataset.preset = next;
         presetBtn.textContent = next;
         rebuildCaptions();
+        updateSplitGapUI();
+        // Auto-preview the new preset at this caption's start so the
+        // user sees the change immediately instead of scrubbing there
+        // themselves.
+        const seekTo = g.length ? g[0].s : (g._start ?? null);
+        if (seekTo != null && isFinite(video.duration)) {
+          video.currentTime = Math.max(0, seekTo - 0.1);
+          if (video.paused) video.play().catch(() => {});
+        }
       });
 
       // "+" — insert a new empty caption after this one.
@@ -809,6 +856,7 @@
     captions = [];
     if (renderer) renderer.state.captions = [];
     renderCaptionList();
+    updateSplitGapUI();
     preview.classList.add('hidden');
     dropzone.classList.remove('hidden');
     exportBtn.disabled = true;

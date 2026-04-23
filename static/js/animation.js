@@ -105,26 +105,38 @@ TA.animation = (() => {
   }
 
   function transformAt(word, t, strength, dirSeed, boring = false) {
+    const preset  = word.preset || (boring ? 'minimal' : 'motion');
+    const wordStr = word.w || '';
+    const letterCount = wordStr.length;
+
     const popStart = word.s;
     const popEnd   = popStart + POP_IN_DURATION;
 
+    // Typewriter keeps revealing letters through the word's spoken
+    // duration — reveal runs until max(popEnd, word.e) so a short
+    // pop window doesn't cut off a long spoken word's reveal.
+    const speechEnd = (word.e && word.e > word.s) ? word.e : word.s + 0.3;
+    const animEnd   = preset === 'typewriter' ? Math.max(popEnd, speechEnd) : popEnd;
+
     if (t < popStart) {
-      return { alpha: 0, tx: 0, ty: 0, scaleX: 1, scaleY: 1 };
+      return { alpha: 0, tx: 0, ty: 0, scaleX: 1, scaleY: 1,
+               revealLetters: 0, revealTotal: letterCount };
     }
-    if (t >= popEnd) {
-      return { alpha: 1, tx: 0, ty: 0, scaleX: 1, scaleY: 1 };
+    if (t >= animEnd) {
+      return { alpha: 1, tx: 0, ty: 0, scaleX: 1, scaleY: 1,
+               revealLetters: letterCount, revealTotal: letterCount };
     }
 
-    const uRaw = (t - popStart) / POP_IN_DURATION;
+    const uRaw = U.clamp((t - popStart) / POP_IN_DURATION, 0, 1);
     const u = U.easing.outCirc(uRaw);
     const remain = 1 - u;
 
-    // Preset-driven variant wins; `boring` is kept as a back-compat alias
-    // for minimal since earlier versions used it directly.
-    const preset = word.preset || (boring ? 'minimal' : 'motion');
     const variant = variantForPreset(preset, dirSeed);
 
     let tx = 0, ty = 0, scaleX = 1, scaleY = 1;
+    // Default: no letter-gating; the word draws whole. Typewriter
+    // overrides this below.
+    let revealLetters = letterCount;
 
     switch (variant) {
       case 'slide-left':
@@ -153,13 +165,20 @@ TA.animation = (() => {
         break;
       }
       case 'typewriter': {
-        // Snap-up from below with linear easing — the word enters with
-        // a quick, mechanical feel rather than the braking smear of
-        // the motion preset. Renderer clips ink progressively
-        // left-to-right via word.preset === 'typewriter' for the full
-        // "carriage return" flavour.
-        const linearRemain = 1 - uRaw;
-        ty = -OFFSET_Y_FRAC * 0.5 * linearRemain;
+        // Letters tick in at the spoken rhythm of the word. The
+        // renderer reads revealLetters + revealTotal and clips to the
+        // actual pixel width of that substring — so the reveal lands
+        // on real letter boundaries, not averaged word width. A short
+        // slide-up plays during the first half of the pop window so
+        // the word doesn't just appear statically at its target.
+        const speechDur = Math.max(0.15, speechEnd - word.s);
+        const speechProgress = U.clamp((t - word.s) / speechDur, 0, 1);
+        revealLetters = Math.min(
+          letterCount,
+          Math.ceil(speechProgress * letterCount),
+        );
+        const slideU = Math.min(1, uRaw * 2);
+        ty = -OFFSET_Y_FRAC * 0.9 * (1 - slideU);
         break;
       }
       case 'smear-x': {
@@ -171,14 +190,15 @@ TA.animation = (() => {
       }
     }
 
-    const alpha = U.clamp(uRaw / 0.3, 0, 1);
+    // Typewriter is visible once the first letter has revealed; the
+    // clip handles the rest. Other presets cross-fade over the first
+    // 30 % of the pop window.
+    const alpha = preset === 'typewriter'
+      ? (revealLetters > 0 ? 1 : 0)
+      : U.clamp(uRaw / 0.3, 0, 1);
 
-    // Typewriter passes back a reveal fraction so the renderer can clip
-    // the word to show it growing left-to-right (like a cursor walking
-    // across the word). Other variants don't need it.
-    const revealFrac = variant === 'typewriter' ? uRaw : 1;
-
-    return { alpha, tx, ty, scaleX, scaleY, revealFrac };
+    return { alpha, tx, ty, scaleX, scaleY,
+             revealLetters, revealTotal: letterCount };
   }
 
   function captionActive(cap, t) {

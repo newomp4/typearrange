@@ -124,7 +124,7 @@ TA.renderer = (() => {
 
         for (let i = 0; i < cap.words.length; i++) {
           const wd = cap.words[i];
-          const { alpha, tx, ty, scaleX, scaleY, revealFrac = 1 } =
+          const { alpha, tx, ty, scaleX, scaleY, revealLetters, revealTotal } =
             A.transformAt(wd, t, state.squash, wd.dirSeed || i, !!wd.boring);
           if (alpha <= 0) continue;
 
@@ -147,21 +147,26 @@ TA.renderer = (() => {
           ctx.save();
           ctx.globalAlpha = alpha * capAlpha;
           ctx.fillStyle = wd.color || '#ffffff';
+          // Set font early — measureText used for typewriter clip needs
+          // it on the context.
+          ctx.font = `${wd.italic ? 'italic ' : ''}${wd.weight} ${fontPx}px ${state.fontFamily}, "Helvetica Neue", sans-serif`;
 
-          // Typewriter preset reveals the ink progressively left-to-right.
-          // Clip BEFORE applying the transform so the clip rectangle is
-          // measured in untransformed canvas pixels — otherwise the
-          // scale applied for smear variants would warp the clip too.
-          // Add a little vertical slack so ascenders / descenders aren't
-          // chopped when the reveal is narrow.
-          if (revealFrac < 1) {
+          // Typewriter preset reveals the word letter-by-letter, timed
+          // to how fast the speaker said it. We measure the revealed
+          // substring against the live font so the clip edge lands on
+          // actual letter boundaries, not an averaged per-character
+          // width. Clip is vertically unlimited so the slide-up (or any
+          // future per-letter y offset) never chops a glyph.
+          const isTypewriter =
+            wd.preset === 'typewriter' &&
+            typeof revealLetters === 'number' &&
+            typeof revealTotal === 'number' &&
+            revealLetters < revealTotal;
+          if (isTypewriter) {
+            const substr = wd.w.substring(0, Math.max(0, revealLetters));
+            const substrWidth = substr ? ctx.measureText(substr).width : 0;
             ctx.beginPath();
-            ctx.rect(
-              x - 2,
-              y - fontPx * 1.2,
-              wPx * revealFrac + 4,
-              fontPx * 1.5,
-            );
+            ctx.rect(drawOriginX - 2, -H, substrWidth + 4, H * 3);
             ctx.clip();
           }
 
@@ -172,7 +177,6 @@ TA.renderer = (() => {
           ctx.scale(scaleX, scaleY);
           ctx.translate(-cx, -cy);
 
-          ctx.font = `${wd.italic ? 'italic ' : ''}${wd.weight} ${fontPx}px ${state.fontFamily}, "Helvetica Neue", sans-serif`;
           ctx.fillText(wd.w, drawOriginX, y);
           ctx.restore();
 
