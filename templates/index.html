@@ -206,11 +206,18 @@
         <button id="captionAppend" class="caption-append-dock" type="button">+ caption</button>
       </div>
       <div class="timeline" id="timeline">
-        <div class="timeline-ruler" id="timelineRuler"></div>
-        <div class="timeline-track" id="timelineTrack">
-          <div class="timeline-empty">drop a video to see the timeline</div>
+        <!-- Inner container absorbs zoom. width = 100% * --timeline-zoom;
+             scales horizontally so blocks keep their percent-of-duration
+             positioning math. The outer .timeline is the scroll viewport. -->
+        <div class="timeline-inner" id="timelineInner">
+          <div class="timeline-ruler" id="timelineRuler"></div>
+          <div class="timeline-track" id="timelineTrack">
+            <div class="timeline-empty">drop a video to see the timeline</div>
+          </div>
+          <div class="timeline-playhead" id="timelinePlayhead" hidden></div>
+          <!-- Selection box overlay drawn by JS during drag-select. -->
+          <div class="timeline-selbox" id="timelineSelbox" hidden></div>
         </div>
-        <div class="timeline-playhead" id="timelinePlayhead" hidden></div>
       </div>
       <div class="dock-inspector" id="dockInspector" hidden></div>
     </section>

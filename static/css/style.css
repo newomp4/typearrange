@@ -486,15 +486,39 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 }
 .dock-spacer { flex: 1; }
 
-/* Timeline fills the middle row of the dock. Blocks now get real
- * height so captions are legible; ruler is a slim header on top. */
+/* Timeline fills the middle row of the dock. The outer .timeline is
+ * the horizontal scroll viewport; .timeline-inner is the ruler/track
+ * canvas whose width scales with --timeline-zoom. Blocks inside keep
+ * their percent-of-duration positioning — they just get wider on screen
+ * as zoom goes up. */
 .timeline {
   position: relative;
   background: #0a0a0a;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   cursor: pointer;
   user-select: none;
   min-width: 0;
+  /* Skinny horizontal scrollbar that doesn't eat into the track. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+.timeline::-webkit-scrollbar { height: 6px; }
+.timeline::-webkit-scrollbar-thumb { background: var(--line-strong); }
+.timeline-inner {
+  position: relative;
+  height: 100%;
+  width: calc(100% * var(--timeline-zoom, 1));
+  min-width: 100%;
+}
+.timeline-selbox {
+  position: absolute;
+  top: 20px;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  z-index: 4;
 }
 .timeline-ruler {
   position: absolute;

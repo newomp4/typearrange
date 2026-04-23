@@ -25,9 +25,11 @@
   // New bottom-dock elements — timeline + inspector replace the old
   // cramped sidebar caption list.
   const timelineEl         = $('#timeline');
+  const timelineInnerEl    = $('#timelineInner');
   const timelineRulerEl    = $('#timelineRuler');
   const timelineTrackEl    = $('#timelineTrack');
   const timelinePlayheadEl = $('#timelinePlayhead');
+  const timelineSelboxEl   = $('#timelineSelbox');
   const dockInspectorEl    = $('#dockInspector');
 
   // -------- Global settings --------------------------------------------
@@ -262,7 +264,7 @@
   function rebuildGroups() {
     if (!transcript) return;
     groups = L.groupWords(transcript.words, settings.wordsPerCaption);
-    selectedIdx = -1;
+    clearSelection();
     renderTimeline();
     renderInspector();
     updateSplitGapUI();
@@ -304,9 +306,72 @@
   // =====================================================================
   const CAPTION_PRESETS = ['motion', 'minimal', 'typewriter', 'split'];
 
-  /** Which caption is currently selected for editing in the inspector.
-   *  -1 means no selection — inspector shows the empty-state prompt. */
+  /** Multi-selection state. `selection` is the set of selected caption
+   *  indices; `anchorIdx` is the last single-click (for shift-range).
+   *  `selectedIdx` is a *derived* primary (lowest index in set, or -1)
+   *  kept around so code that cares about "the one selected caption"
+   *  still reads naturally. Sync via syncSelectedIdx() after any
+   *  selection mutation. */
+  let selection  = new Set();
+  let anchorIdx  = -1;
   let selectedIdx = -1;
+
+  function syncSelectedIdx() {
+    if (!selection.size) { selectedIdx = -1; return; }
+    let min = Infinity;
+    for (const i of selection) if (i < min) min = i;
+    selectedIdx = min;
+  }
+
+  function replaceSelection(idx) {
+    selection = new Set([idx]);
+    anchorIdx = idx;
+    syncSelectedIdx();
+  }
+  function toggleSelection(idx) {
+    if (selection.has(idx)) selection.delete(idx);
+    else                    selection.add(idx);
+    anchorIdx = idx;
+    syncSelectedIdx();
+  }
+  function rangeSelection(idx) {
+    if (anchorIdx < 0) { replaceSelection(idx); return; }
+    const lo = Math.min(anchorIdx, idx);
+    const hi = Math.max(anchorIdx, idx);
+    selection = new Set();
+    for (let i = lo; i <= hi; i++) selection.add(i);
+    syncSelectedIdx();
+  }
+  function clearSelection() {
+    selection = new Set();
+    anchorIdx = -1;
+    selectedIdx = -1;
+  }
+
+  /** Timeline zoom (1 = fit-to-width, max 20×). Stored as a number and
+   *  applied to --timeline-zoom on the inner container. */
+  let zoom = 1;
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 20;
+  const ZOOM_STEP = 1.5;
+
+  function setZoom(next, { centerOnPlayhead = true } = {}) {
+    const clamped = U.clamp(next, ZOOM_MIN, ZOOM_MAX);
+    if (clamped === zoom) return;
+    zoom = clamped;
+    timelineInnerEl.style.setProperty('--timeline-zoom', zoom);
+    renderTimelineRuler();
+    if (centerOnPlayhead) scrollToPlayhead();
+  }
+
+  function scrollToPlayhead() {
+    if (!isFinite(video?.duration) || video.duration <= 0) return;
+    const pct = video.currentTime / video.duration;
+    const innerW = timelineInnerEl.offsetWidth;
+    const viewW  = timelineEl.clientWidth;
+    const target = pct * innerW - viewW / 2;
+    timelineEl.scrollLeft = U.clamp(target, 0, Math.max(0, innerW - viewW));
+  }
 
   /** Derive [start, end] for a group — uses words if present, else the
    *  sentinel _start/_end set at insert-time. */
@@ -370,7 +435,7 @@
       block.className = 'cap-block';
       block.dataset.preset = groupPreset(g);
       if (!g.length) block.classList.add('empty');
-      if (i === selectedIdx) block.classList.add('selected');
+      if (selection.has(i)) block.classList.add('selected');
 
       const span = groupSpan(g);
       const leftPct  = U.clamp(span.start / dur, 0, 1) * 100;
@@ -441,11 +506,21 @@
         applyDrag(dt);
       }
 
-      function onUp() {
+      function onUp(ev) {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        if (!dragged) {
-          // Treat as a click — select + seek.
+        if (dragged) return;
+        // Click — modifier keys decide selection mode.
+        if (ev.metaKey || ev.ctrlKey) {
+          toggleSelection(idx);
+          renderTimelineBlocks();
+          renderInspector();
+        } else if (ev.shiftKey) {
+          rangeSelection(idx);
+          renderTimelineBlocks();
+          renderInspector();
+        } else {
+          // Plain click: single-select + seek + preview.
           selectCaption(idx, { seek: true, play: false });
         }
       }
@@ -543,14 +618,69 @@
 
   function renderInspector() {
     dockInspectorEl.innerHTML = '';
-    const g = groups && selectedIdx >= 0 ? groups[selectedIdx] : null;
+    // Hidden state — the inspector row collapses out of the dock grid
+    // (HTML `hidden` attribute) so the timeline gets its space.
+    if (!groups || selection.size === 0) {
+      dockInspectorEl.hidden = true;
+      return;
+    }
+    dockInspectorEl.hidden = false;
+
+    // Bulk-edit mode for multi-selection: compact row with count + the
+    // actions that make sense in bulk (cycle preset for each, delete all).
+    // Text editing and per-caption timestamp don't translate to bulk, so
+    // they're hidden until the user drops back to a single selection.
+    if (selection.size > 1) {
+      const countField = document.createElement('div');
+      countField.className = 'insp-field';
+      countField.innerHTML = `<span class="insp-label">selection</span>
+                              <span class="insp-time">${selection.size} captions</span>`;
+
+      const presetField = document.createElement('div');
+      presetField.className = 'insp-field';
+      presetField.innerHTML = '<span class="insp-label">style</span>';
+      const cycleBtn = document.createElement('button');
+      cycleBtn.className = 'insp-preset';
+      cycleBtn.dataset.preset = 'motion';
+      cycleBtn.textContent = 'cycle preset';
+      cycleBtn.title = 'advance each selected caption one preset forward';
+      cycleBtn.addEventListener('click', () => {
+        for (const i of selection) {
+          const cg = groups[i];
+          if (!cg) continue;
+          const idx = CAPTION_PRESETS.indexOf(groupPreset(cg));
+          cg.preset = CAPTION_PRESETS[(idx + 1) % CAPTION_PRESETS.length];
+          delete cg.boring;
+        }
+        rebuildCaptions();
+        renderTimelineBlocks();
+        renderInspector();
+        updateSplitGapUI();
+      });
+      presetField.appendChild(cycleBtn);
+
+      const actionsField = document.createElement('div');
+      actionsField.className = 'insp-field';
+      actionsField.innerHTML = '<span class="insp-label">actions</span>';
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'insp-actions';
+      const delAllBtn = document.createElement('button');
+      delAllBtn.className = 'insp-btn danger';
+      delAllBtn.textContent = '×';
+      delAllBtn.title = `delete all ${selection.size} selected captions`;
+      delAllBtn.addEventListener('click', deleteSelected);
+      actionsRow.appendChild(delAllBtn);
+      actionsField.appendChild(actionsRow);
+
+      dockInspectorEl.appendChild(countField);
+      dockInspectorEl.appendChild(presetField);
+      dockInspectorEl.appendChild(actionsField);
+      return;
+    }
+
+    const g = groups[selectedIdx];
     if (!g) {
-      const empty = document.createElement('div');
-      empty.className = 'inspector-empty';
-      empty.textContent = groups?.length
-        ? 'click a caption on the timeline to edit'
-        : 'drop a video to edit captions';
-      dockInspectorEl.appendChild(empty);
+      dockInspectorEl.hidden = true;
       return;
     }
     const span = groupSpan(g);
@@ -645,7 +775,7 @@
     delBtn.title = 'delete caption';
     delBtn.addEventListener('click', () => {
       deleteCaption(selectedIdx);
-      selectedIdx = -1;
+      clearSelection();
       renderTimeline();
       renderInspector();
       updateSplitGapUI();
@@ -662,12 +792,13 @@
   }
 
   /** Public selection helper — used by block clicks, insert/delete, and
-   *  keyboard shortcuts. */
+   *  keyboard shortcuts. Replaces any existing multi-selection with
+   *  just this caption. */
   function selectCaption(idx, { seek = true, play = false, focusText = false } = {}) {
     if (!groups || idx < 0 || idx >= groups.length) {
-      selectedIdx = -1;
+      clearSelection();
     } else {
-      selectedIdx = idx;
+      replaceSelection(idx);
     }
     const g = groups?.[selectedIdx];
     if (g && seek && isFinite(video.duration)) {
@@ -735,6 +866,55 @@
     rebuildCaptions();
   }
 
+  /** Remove every caption currently in `selection`. Walks highest → lowest
+   *  so splice indexes stay valid. Clears selection at the end. */
+  function deleteSelected() {
+    if (!groups || selection.size === 0) return;
+    const idxs = [...selection].sort((a, b) => b - a);
+    for (const i of idxs) groups.splice(i, 1);
+    clearSelection();
+    rebuildCaptions();
+    renderTimeline();
+    renderInspector();
+    updateSplitGapUI();
+  }
+
+  /** Split the caption whose time range contains the playhead into two
+   *  halves at the first word boundary ≥ playhead. Premiere's Cmd+K. */
+  function cutAtPlayhead() {
+    if (!groups?.length) return;
+    const t = video.currentTime;
+    if (!isFinite(t)) return;
+    const idx = groups.findIndex(g => {
+      const span = groupSpan(g);
+      return t >= span.start && t <= span.end;
+    });
+    if (idx < 0) return;
+    const g = groups[idx];
+    if (!g.length || g.length < 2) return; // can't split empty / single-word
+    // First word whose start time is at or after the playhead becomes
+    // the head of the second half.
+    let k = g.findIndex(w => w.s >= t);
+    if (k <= 0) k = 1;                     // keep at least one word in first half
+    if (k >= g.length) return;             // playhead is past every word — no split
+
+    const first  = Array.from(g.slice(0, k));
+    const second = Array.from(g.slice(k));
+    // Preserve per-group metadata on both halves.
+    if (g.preset) { first.preset = g.preset; second.preset = g.preset; }
+    if (g.boring) { first.boring = true;     second.boring = true;     }
+
+    groups.splice(idx, 1, first, second);
+    // Select both halves so the user sees what happened.
+    selection = new Set([idx, idx + 1]);
+    anchorIdx = idx;
+    syncSelectedIdx();
+    rebuildCaptions();
+    renderTimeline();
+    renderInspector();
+    updateSplitGapUI();
+  }
+
   /** "+ caption" in the dock topbar — appends at the end of the
    *  timeline and auto-selects the new slot so the user can type. */
   document.getElementById('captionAppend').addEventListener('click', () => {
@@ -752,13 +932,85 @@
     selectCaption(groups.length - 1, { seek: false, play: false, focusText: true });
   });
 
-  // Timeline background click = scrub to that position. Blocks
-  // stopPropagation so this only fires on empty timeline area.
-  timelineEl.addEventListener('click', e => {
-    if (!isFinite(video.duration)) return;
-    const rect = timelineEl.getBoundingClientRect();
-    const u = U.clamp((e.clientX - rect.left) / rect.width, 0, 1);
-    video.currentTime = u * video.duration;
+  // Timeline background pointerdown:
+  //   - no movement → scrub to that time (old "click to seek" behaviour)
+  //   - movement    → draw a selection box; captions whose time range
+  //                   overlaps the box get selected
+  // Modifier keys on pointerup decide how the new selection merges:
+  //   plain      → replace current selection
+  //   Cmd/Ctrl   → union with current
+  //   Shift      → union with current (shift-drag is "add to range")
+  // Blocks stopPropagation in their own pointerdown, so this only
+  // runs on empty timeline area.
+  timelineEl.addEventListener('pointerdown', e => {
+    if (!isFinite(video.duration) || video.duration <= 0) return;
+    if (e.button !== 0) return;
+    const innerRect = timelineInnerEl.getBoundingClientRect();
+    const startFrac = U.clamp((e.clientX - innerRect.left) / innerRect.width, 0, 1);
+    const startY    = e.clientY;
+    let moved = false;
+
+    function fracAt(clientX) {
+      return U.clamp((clientX - innerRect.left) / innerRect.width, 0, 1);
+    }
+
+    function onMove(ev) {
+      const dx = Math.abs(ev.clientX - e.clientX);
+      const dy = Math.abs(ev.clientY - startY);
+      if (!moved && (dx > 3 || dy > 3)) {
+        moved = true;
+        timelineSelboxEl.hidden = false;
+      }
+      if (!moved) return;
+      const curFrac = fracAt(ev.clientX);
+      const left  = Math.min(startFrac, curFrac) * 100;
+      const width = Math.abs(curFrac - startFrac) * 100;
+      timelineSelboxEl.style.left  = `${left}%`;
+      timelineSelboxEl.style.width = `${width}%`;
+    }
+
+    function onUp(ev) {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      if (!moved) {
+        // Scrub. Modifier-less click on empty timeline = clear selection.
+        video.currentTime = startFrac * video.duration;
+        if (!(ev.shiftKey || ev.metaKey || ev.ctrlKey)) {
+          clearSelection();
+          renderTimelineBlocks();
+          renderInspector();
+        }
+        return;
+      }
+      // Drag-box selection.
+      timelineSelboxEl.hidden = true;
+      timelineSelboxEl.style.width = '0%';
+      const curFrac = fracAt(ev.clientX);
+      const timeMin = Math.min(startFrac, curFrac) * video.duration;
+      const timeMax = Math.max(startFrac, curFrac) * video.duration;
+      const hits = new Set();
+      if (groups) {
+        groups.forEach((g, i) => {
+          const span = groupSpan(g);
+          // Any overlap between [span.start, span.end] and [timeMin, timeMax].
+          if (span.start < timeMax && span.end > timeMin) hits.add(i);
+        });
+      }
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
+        for (const i of hits) selection.add(i);
+      } else {
+        selection = hits;
+      }
+      // Anchor = first (lowest-idx) hit so subsequent shift-clicks extend
+      // from that point, which matches the feel of drag-then-shift-click.
+      anchorIdx = hits.size ? Math.min(...hits) : -1;
+      syncSelectedIdx();
+      renderTimelineBlocks();
+      renderInspector();
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   });
 
   /** Highlight the currently-playing block on the timeline.
@@ -785,8 +1037,23 @@
       return;
     }
     timelinePlayheadEl.hidden = false;
-    const pct = (video.currentTime / video.duration) * 100;
-    timelinePlayheadEl.style.left = `${pct}%`;
+    const pct = video.currentTime / video.duration;
+    timelinePlayheadEl.style.left = `${pct * 100}%`;
+
+    // Auto-pan while playing so the playhead stays on-screen when zoomed
+    // in. Only nudges when the playhead actually leaves the viewport —
+    // otherwise user-initiated scrolls aren't yanked around.
+    if (zoom > 1 && !video.paused) {
+      const innerW = timelineInnerEl.offsetWidth;
+      const viewW  = timelineEl.clientWidth;
+      const phX    = pct * innerW;
+      const scrollL = timelineEl.scrollLeft;
+      if (phX < scrollL || phX > scrollL + viewW) {
+        timelineEl.scrollLeft = U.clamp(
+          phX - viewW / 2, 0, Math.max(0, innerW - viewW),
+        );
+      }
+    }
   }
 
   // =====================================================================
@@ -1018,7 +1285,18 @@
   // button / textarea so we don't hijack typing or native button activation.
   document.addEventListener('keydown', e => {
     const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+    const inField = tag === 'INPUT' || tag === 'TEXTAREA';
+
+    // Cmd/Ctrl+K — cut at playhead (Premiere-style add-edit). Allowed
+    // even from a field because it never conflicts with typing, and
+    // users reach for it while an input happens to be focused.
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      cutAtPlayhead();
+      return;
+    }
+
+    if (inField || tag === 'BUTTON') return;
 
     // Space: play/pause.
     if (e.code === 'Space') {
@@ -1041,6 +1319,42 @@
       e.preventDefault();
       video.muted = !video.muted;
       refreshMuteBtn();
+      return;
+    }
+
+    // Zoom: + zooms in, - zooms out, 0 resets. Accept '=' too (same
+    // physical key as '+' without shift on most layouts).
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      setZoom(zoom * ZOOM_STEP);
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      setZoom(zoom / ZOOM_STEP);
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      setZoom(1);
+      return;
+    }
+
+    // Delete / Backspace: remove every selected caption.
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (selection.size === 0) return;
+      e.preventDefault();
+      deleteSelected();
+      return;
+    }
+
+    // Escape: clear selection (also hides the inspector row).
+    if (e.key === 'Escape') {
+      if (selection.size === 0) return;
+      e.preventDefault();
+      clearSelection();
+      renderTimelineBlocks();
+      renderInspector();
       return;
     }
   });
@@ -1142,7 +1456,8 @@
     transcript = null;
     groups = null;
     captions = [];
-    selectedIdx = -1;
+    clearSelection();
+    setZoom(1, { centerOnPlayhead: false });
     if (renderer) renderer.state.captions = [];
     renderTimeline();
     renderInspector();
