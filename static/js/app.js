@@ -48,6 +48,12 @@
     squash:          0.6,
     sizeScale:       1.0,
     safeArea:        { ...TA.layout.DEFAULT_SAFE_AREA },
+    /** Dark-ramp overlay — optional gradient composited over the video
+     *  (multiply) but below the text captions. Great for pushing
+     *  captions into readable contrast on bright footage. */
+    gradientEnabled: false,
+    gradientOpacity: 0.6,
+    gradientStart:   0.5,
     /** Split-preset "object" gap — the rectangular region where a
      *  central subject is framed in the video. The split layout places
      *  the first half of each caption's words to the left of this box
@@ -250,11 +256,14 @@
   function applySettingsToRenderer() {
     if (!renderer) return;
     renderer.set({
-      fontFamily:   settings.fontFamily,
-      blendMode:    settings.blendMode,
-      posterizeFps: settings.posterizeFps,
-      squash:       settings.squash,
-      trackingEm:   settings.trackingEm,
+      fontFamily:      settings.fontFamily,
+      blendMode:       settings.blendMode,
+      posterizeFps:    settings.posterizeFps,
+      squash:          settings.squash,
+      trackingEm:      settings.trackingEm,
+      gradientEnabled: settings.gradientEnabled,
+      gradientOpacity: settings.gradientOpacity,
+      gradientStart:   settings.gradientStart,
     });
   }
 
@@ -1382,6 +1391,14 @@
     settings.blendMode = v;
     applySettingsToRenderer();
   });
+
+  // Dark-ramp overlay (toggle + opacity + start position).
+  const gradientEnabledEl = document.getElementById('gradientEnabled');
+  gradientEnabledEl.checked = settings.gradientEnabled;
+  gradientEnabledEl.addEventListener('change', () => {
+    settings.gradientEnabled = gradientEnabledEl.checked;
+    applySettingsToRenderer();
+  });
   wireSeg($('#alignSeg'), v => {
     settings.alignment = v;
     rebuildCaptions();
@@ -1414,6 +1431,16 @@
   wireRange('wordGapRange', 'wordGapVal', v => `${(v/100).toFixed(2)}em`, v => {
     settings.wordGapEm = v / 100;
     rebuildCaptions();
+  });
+
+  wireRange('gradientOpacityRange', 'gradientOpacityVal', v => `${v}%`, v => {
+    settings.gradientOpacity = v / 100;
+    applySettingsToRenderer();
+  });
+
+  wireRange('gradientStartRange', 'gradientStartVal', v => `${v}%`, v => {
+    settings.gradientStart = v / 100;
+    applySettingsToRenderer();
   });
 
   wireRange('fpsRange', 'fpsVal', v => `${v}`, v => {

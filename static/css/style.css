@@ -318,6 +318,55 @@ button { font-family: inherit; }
   color: var(--fg-dim);
   margin-bottom: 10px;
 }
+/* Title bar with an inline toggle control on the right. */
+.panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Slim switch-style toggle — used for on/off settings like dark ramp. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-track {
+  display: inline-block;
+  position: relative;
+  width: 28px;
+  height: 16px;
+  background: var(--line-strong);
+  border-radius: 10px;
+  transition: background .15s var(--ease);
+}
+.toggle-dot {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--fg-dim);
+  border-radius: 50%;
+  transition: left .15s var(--ease), background .15s var(--ease);
+}
+.toggle input:checked + .toggle-track { background: var(--fg); }
+.toggle input:checked + .toggle-track .toggle-dot {
+  left: 14px;
+  background: #000;
+}
+.toggle:hover .toggle-track { background: #3a3a3a; }
+.toggle:hover input:checked + .toggle-track { background: #fff; }
 .panel-title-toggle {
   display: flex;
   justify-content: space-between;

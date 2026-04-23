@@ -102,6 +102,26 @@
       </div>
 
       <div class="panel-section">
+        <div class="panel-title panel-title-row">
+          <span>dark ramp</span>
+          <label class="toggle">
+            <input type="checkbox" id="gradientEnabled" />
+            <span class="toggle-track"><span class="toggle-dot"></span></span>
+          </label>
+        </div>
+        <div class="row">
+          <label>opacity</label>
+          <span class="val" id="gradientOpacityVal">60%</span>
+        </div>
+        <input type="range" id="gradientOpacityRange" min="0" max="100" step="1" value="60" />
+        <div class="row">
+          <label>start</label>
+          <span class="val" id="gradientStartVal">50%</span>
+        </div>
+        <input type="range" id="gradientStartRange" min="0" max="100" step="1" value="50" />
+      </div>
+
+      <div class="panel-section">
         <div class="row">
           <label>words / caption</label>
           <span class="val" id="wordsVal">6</span>

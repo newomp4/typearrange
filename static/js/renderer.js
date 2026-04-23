@@ -34,6 +34,13 @@ TA.renderer = (() => {
       posterizeFps:  12,
       squash:        0.6,
       trackingEm:    -0.06,
+      /** Dark-ramp overlay: white-top → black-bottom linear gradient
+       *  composited over the video (multiply blend) but *below* the
+       *  text captions. Good for pushing captions into readable
+       *  contrast over bright footage. */
+      gradientEnabled: false,
+      gradientOpacity: 0.6,
+      gradientStart:   0.5,
       /** Optional extra debug drawing */
       showBounds:    false,
     };
@@ -97,6 +104,26 @@ TA.renderer = (() => {
         // Video may not be ready yet — draw black.
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, W, H);
+      }
+
+      // 1.5 Optional dark-ramp overlay. Drawn BEFORE the captions so
+      //     the ramp sits between video and text — captions read
+      //     cleanly on the darkened bottom band without themselves
+      //     being dimmed.
+      if (state.gradientEnabled && state.gradientOpacity > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = state.gradientOpacity;
+        const startClamp = Math.min(0.999, Math.max(0, state.gradientStart));
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        // Top → start: pure white (multiply = no change).
+        // start → bottom: white → black (smooth darkening).
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(startClamp, 'rgba(255,255,255,1)');
+        grad.addColorStop(1, 'rgba(0,0,0,1)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
       }
 
       // 2. Find active captions and composite them.
